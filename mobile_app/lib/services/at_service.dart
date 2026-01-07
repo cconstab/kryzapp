@@ -9,10 +9,10 @@ import 'package:kryz_shared/kryz_shared.dart';
 final logger = Logger('AtService');
 
 class AtService extends ChangeNotifier {
-  AtClientService? _atClientService;
   AtClient? _atClient;
   String? _currentAtSign;
   bool _isInitialized = false;
+  bool _isDisposed = false;
   StreamSubscription? _notificationSubscription;
 
   // Callback for received stats
@@ -28,8 +28,6 @@ class AtService extends ChangeNotifier {
     try {
       logger.info('Initializing atClient service');
 
-      _atClientService = AtClientService();
-
       // Trigger onboarding
       await AtOnboarding.onboard(
         context: context,
@@ -39,7 +37,8 @@ class AtService extends ChangeNotifier {
             ..namespace = 'kryz'
             ..hiveStoragePath = 'storage'
             ..commitLogPath = 'storage/commitLog'
-            ..isLocalStoreRequired = true,
+            ..isLocalStoreRequired = true // Required for keys and auth
+            ..fetchOfflineNotifications = false, // Only process new notifications, not history
           rootEnvironment: RootEnvironment.Production,
           domain: 'root.atsign.org',
         ),
@@ -73,20 +72,43 @@ class AtService extends ChangeNotifier {
   void _subscribeToNotifications() {
     if (_atClient == null) return;
 
-    logger.info('Subscribing to notifications');
+    logger.info('Subscribing to notifications (current data only)');
 
-    _notificationSubscription = _atClient!.notificationService.subscribe(regex: '.*kryz', shouldDecrypt: true).listen(
+    // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
+    _notificationSubscription = _atClient!.notificationService
+        .subscribe(
+          regex: '.*kryz',
+          shouldDecrypt: true,
+        )
+        .listen(
       (notification) {
-        _handleNotification(notification);
+        try {
+          _handleNotification(notification);
+        } catch (e, stackTrace) {
+          // Catch any errors during notification handling to prevent stream closure
+          logger.severe('Error handling notification: $e', e, stackTrace);
+        }
       },
-      onError: (error) {
-        logger.severe('Notification stream error: $error');
+      onError: (error, stackTrace) {
+        // Handle stream errors gracefully
+        if (error.toString().contains('FileSystemException') || error.toString().contains('File closed')) {
+          logger.warning('File system error in notification stream (likely app shutdown): $error');
+        } else {
+          logger.severe('Notification stream error: $error', error, stackTrace);
+        }
       },
+      cancelOnError: false, // Keep subscription alive despite errors
     );
   }
 
   /// Handle incoming notification
   void _handleNotification(AtNotification notification) {
+    // Ignore notifications if service is disposed
+    if (_isDisposed) {
+      logger.fine('Ignoring notification after disposal');
+      return;
+    }
+
     try {
       logger.info('Received notification: ${notification.key}');
       logger.fine(
@@ -124,6 +146,7 @@ class AtService extends ChangeNotifier {
   /// Cleanup
   @override
   void dispose() {
+    _isDisposed = true;
     _notificationSubscription?.cancel();
     super.dispose();
   }

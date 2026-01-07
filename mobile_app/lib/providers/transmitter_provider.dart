@@ -45,14 +45,14 @@ class TransmitterProvider extends ChangeNotifier {
   void _onDataTimeout() {
     _isDataStale = true;
     _currentStats = null;
-    
+
     // Raise an alert
     updateAlert({
       'level': 'critical',
       'message': 'No data received from transmitter for 1 minute. Connection may be lost.',
       'timestamp': DateTime.now().toIso8601String(),
     });
-    
+
     notifyListeners();
   }
 
