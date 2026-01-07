@@ -36,13 +36,13 @@ class SNMPService {
     if (!useSimulatedData) {
       try {
         logger.info('Initializing SNMP session for $host:$port with community: $community');
-        
+
         // Create InternetAddress from host string
         final target = InternetAddress(host);
-        
+
         // Create session with the target - dart_snmp 3.0.1 API
         _session = await snmp.Snmp.createSession(target, community: community, port: port);
-        
+
         logger.info('SNMP session initialized successfully');
       } catch (e, stack) {
         logger.severe('Failed to initialize SNMP session: $e', e, stack);
@@ -69,7 +69,8 @@ class SNMPService {
       final heatTemp = await _queryOid(oidHeatTemp, divisor: 1000);
       final fanSpeed = await _queryOid(oidFanSpeed, divisor: 1);
 
-      logger.info('SNMP values - Mod: $modulation%, SWR: $swr, PwrOut: ${powerOut}W, PwrRef: ${powerRef}W, Temp: ${heatTemp}°C, Fan: ${fanSpeed}RPM');
+      logger.info(
+          'SNMP values - Mod: $modulation%, SWR: $swr, PwrOut: ${powerOut}W, PwrRef: ${powerRef}W, Temp: ${heatTemp}°C, Fan: ${fanSpeed}RPM');
 
       // Determine status and alert level
       String status = 'ON_AIR';
@@ -105,17 +106,17 @@ class SNMPService {
     try {
       final oidObj = snmp.Oid.fromString(oid);
       final message = await _session.get(oidObj);
-      
+
       if (message.pdu.error.value != 0) {
         logger.warning('SNMP error for OID $oid: ${message.pdu.error}');
         return 0.0;
       }
 
       final varbind = message.pdu.varbinds.first;
-      
+
       // Extract the integer value from the varbind
       int intValue = 0;
-      
+
       if (varbind.value is int) {
         intValue = varbind.value as int;
       } else if (varbind.value is BigInt) {
@@ -139,22 +140,25 @@ class SNMPService {
     final now = DateTime.now();
     final random = _random.nextInt(100);
 
-    // Simulate realistic transmitter values
-    final modulation = 85.0 + (random % 15); // 85-100%
-    final swr = 1.1 + (random % 8) / 10; // 1.1-1.9
-    final powerOut = 4800.0 + (random % 400) - 200; // 4600-5000W
-    final powerRef = 50.0 + (random % 50); // 50-100W
-    final heatTemp = 55.0 + (random % 25); // 55-80°C
-    final fanSpeed = 2800.0 + (random % 400); // 2800-3200 RPM
+    // Simulate realistic KRYZ transmitter values matching real measurements
+    final modulation = 75.0 + (random % 20); // 75-95% (normal range 60-100%)
+    final swr = 1.05 + (random % 10) / 100; // 1.05-1.15 (good range, warn >1.5, error >2.0)
+    final powerOut = 4500.0 + (random % 1000); // 4500-5500W (typical FM transmitter)
+    final powerRef = 20.0 + (random % 30); // 20-50W (reflected power, should be low)
+    final heatTemp = 50.0 + (random % 20); // 50-70°C (normal operating temp)
+    final fanSpeed = 3000.0 + (random % 500); // 3000-3500 RPM (normal cooling)
 
-    // Determine status and alert level
+    // Determine status and alert level based on realistic thresholds
     String status = 'ON_AIR';
     String? alertLevel;
 
-    if (heatTemp > 90.0 || swr > 3.0) {
+    // Critical conditions
+    if (heatTemp > 85.0 || swr > 2.0 || modulation < 50.0 || modulation > 105.0) {
       status = 'FAULT';
       alertLevel = 'critical';
-    } else if (heatTemp > 75.0 || swr > 1.8) {
+    }
+    // Warning conditions
+    else if (heatTemp > 75.0 || swr > 1.5 || modulation < 60.0 || modulation > 100.0 || fanSpeed < 2500.0) {
       alertLevel = 'warning';
     }
 

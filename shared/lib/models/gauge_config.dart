@@ -3,16 +3,25 @@ class GaugeConfig {
   final String metricName;
   final double minValue;
   final double maxValue;
-  final double warningThreshold;
-  final double criticalThreshold;
+
+  // High-side thresholds (for values that are bad when too high)
+  final double? warningHighThreshold;
+  final double? criticalHighThreshold;
+
+  // Low-side thresholds (for values that are bad when too low)
+  final double? warningLowThreshold;
+  final double? criticalLowThreshold;
+
   final String unit;
 
   GaugeConfig({
     required this.metricName,
     required this.minValue,
     required this.maxValue,
-    required this.warningThreshold,
-    required this.criticalThreshold,
+    this.warningHighThreshold,
+    this.criticalHighThreshold,
+    this.warningLowThreshold,
+    this.criticalLowThreshold,
     required this.unit,
   });
 
@@ -20,8 +29,10 @@ class GaugeConfig {
         'metricName': metricName,
         'minValue': minValue,
         'maxValue': maxValue,
-        'warningThreshold': warningThreshold,
-        'criticalThreshold': criticalThreshold,
+        'warningHighThreshold': warningHighThreshold,
+        'criticalHighThreshold': criticalHighThreshold,
+        'warningLowThreshold': warningLowThreshold,
+        'criticalLowThreshold': criticalLowThreshold,
         'unit': unit,
       };
 
@@ -29,8 +40,14 @@ class GaugeConfig {
         metricName: json['metricName'] as String,
         minValue: (json['minValue'] as num).toDouble(),
         maxValue: (json['maxValue'] as num).toDouble(),
-        warningThreshold: (json['warningThreshold'] as num).toDouble(),
-        criticalThreshold: (json['criticalThreshold'] as num).toDouble(),
+        warningHighThreshold:
+            json['warningHighThreshold'] != null ? (json['warningHighThreshold'] as num).toDouble() : null,
+        criticalHighThreshold:
+            json['criticalHighThreshold'] != null ? (json['criticalHighThreshold'] as num).toDouble() : null,
+        warningLowThreshold:
+            json['warningLowThreshold'] != null ? (json['warningLowThreshold'] as num).toDouble() : null,
+        criticalLowThreshold:
+            json['criticalLowThreshold'] != null ? (json['criticalLowThreshold'] as num).toDouble() : null,
         unit: json['unit'] as String,
       );
 
@@ -38,16 +55,20 @@ class GaugeConfig {
     String? metricName,
     double? minValue,
     double? maxValue,
-    double? warningThreshold,
-    double? criticalThreshold,
+    double? warningHighThreshold,
+    double? criticalHighThreshold,
+    double? warningLowThreshold,
+    double? criticalLowThreshold,
     String? unit,
   }) {
     return GaugeConfig(
       metricName: metricName ?? this.metricName,
       minValue: minValue ?? this.minValue,
       maxValue: maxValue ?? this.maxValue,
-      warningThreshold: warningThreshold ?? this.warningThreshold,
-      criticalThreshold: criticalThreshold ?? this.criticalThreshold,
+      warningHighThreshold: warningHighThreshold ?? this.warningHighThreshold,
+      criticalHighThreshold: criticalHighThreshold ?? this.criticalHighThreshold,
+      warningLowThreshold: warningLowThreshold ?? this.warningLowThreshold,
+      criticalLowThreshold: criticalLowThreshold ?? this.criticalLowThreshold,
       unit: unit ?? this.unit,
     );
   }
@@ -58,49 +79,59 @@ class GaugeConfig {
       'modulation': GaugeConfig(
         metricName: 'modulation',
         minValue: 0,
-        maxValue: 100,
-        warningThreshold: 95,
-        criticalThreshold: 98,
+        maxValue: 120,
+        warningLowThreshold: 60, // Warning if below 60%
+        criticalLowThreshold: 50, // Critical if below 50%
+        warningHighThreshold: 100, // Warning if above 100%
+        criticalHighThreshold: 105, // Critical if above 105%
         unit: '%',
       ),
       'swr': GaugeConfig(
         metricName: 'swr',
         minValue: 1.0,
         maxValue: 5.0,
-        warningThreshold: 1.8,
-        criticalThreshold: 3.0,
+        warningLowThreshold: null, // SWR can't be too low (1.0 is perfect)
+        criticalLowThreshold: null,
+        warningHighThreshold: 1.5,
+        criticalHighThreshold: 2.0,
         unit: ':1',
       ),
       'powerOut': GaugeConfig(
         metricName: 'powerOut',
         minValue: 0,
         maxValue: 6000,
-        warningThreshold: 5000,
-        criticalThreshold: 5500,
+        warningLowThreshold: 4000, // Warning if power drops too low
+        criticalLowThreshold: 3000, // Critical if power very low
+        warningHighThreshold: 5000,
+        criticalHighThreshold: 5500,
         unit: 'W',
       ),
       'powerRef': GaugeConfig(
         metricName: 'powerRef',
         minValue: 0,
         maxValue: 200,
-        warningThreshold: 100,
-        criticalThreshold: 150,
+        warningLowThreshold: null, // Reflected power low is good
+        criticalLowThreshold: null,
+        warningHighThreshold: 100,
+        criticalHighThreshold: 150,
         unit: 'W',
       ),
       'heatTemp': GaugeConfig(
         metricName: 'heatTemp',
         minValue: 0,
         maxValue: 120,
-        warningThreshold: 75,
-        criticalThreshold: 90,
+        warningLowThreshold: null, // Low temp is fine
+        criticalLowThreshold: null,
+        warningHighThreshold: 75,
+        criticalHighThreshold: 90,
         unit: '°C',
       ),
       'fanSpeed': GaugeConfig(
         metricName: 'fanSpeed',
         minValue: 0,
         maxValue: 5000,
-        warningThreshold: 4000,
-        criticalThreshold: 4500,
+        warningLowThreshold: 2000, // Warning if fan too slow
+        criticalLowThreshold: 1500, // Critical if fan too slow
         unit: 'RPM',
       ),
     };

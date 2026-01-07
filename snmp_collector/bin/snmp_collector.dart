@@ -22,7 +22,7 @@ void main(List<String> arguments) async {
     ..addOption('port', abbr: 'p', help: 'SNMP port', defaultsTo: '161')
     ..addOption('community', abbr: 'c', help: 'SNMP community string', defaultsTo: 'public')
     ..addOption('interval', abbr: 'i', help: 'Poll interval in seconds', defaultsTo: '5')
-    ..addFlag('simulated', abbr: 's', help: 'Use simulated data instead of real SNMP queries', defaultsTo: true)
+    ..addFlag('simulated', abbr: 's', help: 'Use simulated data instead of real SNMP queries', defaultsTo: false)
     ..addFlag('help', negatable: false, help: 'Show this help message');
 
   try {

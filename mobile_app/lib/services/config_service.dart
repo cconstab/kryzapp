@@ -1,31 +1,43 @@
 import 'dart:convert';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'package:kryz_shared/kryz_shared.dart';
 import 'package:logging/logging.dart';
+import 'package:at_client_mobile/at_client_mobile.dart';
 
 final logger = Logger('ConfigService');
 
 class ConfigService {
-  static const String _configFileName = 'dashboard_config.json';
+  static const String _atKeyName = 'kryz_dashboard_config';
+
   DashboardConfig? _currentConfig;
+  AtClient? _atClient;
 
   DashboardConfig get config => _currentConfig ?? DashboardConfig.defaults();
 
-  /// Load configuration from file
+  /// Initialize with AtClient for syncing
+  void setAtClient(AtClient? atClient) {
+    _atClient = atClient;
+  }
+
+  /// Load configuration - from atProtocol if available, otherwise use defaults
   Future<void> loadConfig() async {
     try {
-      final file = await _getConfigFile();
+      // Try loading from atProtocol if connected
+      if (_atClient != null) {
+        final atConfig = await _loadFromAtProtocol();
+        if (atConfig != null) {
+          _currentConfig = atConfig;
+          logger.info('Configuration loaded from atProtocol');
+          return;
+        }
+      }
 
-      if (await file.exists()) {
-        final jsonString = await file.readAsString();
-        final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
-        _currentConfig = DashboardConfig.fromJson(jsonData);
-        logger.info('Configuration loaded from file');
-      } else {
-        _currentConfig = DashboardConfig.defaults();
-        await saveConfig(_currentConfig!);
-        logger.info('Created default configuration');
+      // Use defaults if nothing saved yet
+      _currentConfig = DashboardConfig.defaults();
+      logger.info('Using default configuration');
+
+      // Save defaults to atProtocol for next time
+      if (_atClient != null) {
+        await _saveToAtProtocol(_currentConfig!);
       }
     } catch (e) {
       logger.severe('Failed to load configuration: $e');
@@ -33,27 +45,69 @@ class ConfigService {
     }
   }
 
-  /// Save configuration to file
+  /// Save configuration to atProtocol
   Future<void> saveConfig(DashboardConfig config) async {
     try {
-      final file = await _getConfigFile();
-      final jsonString = jsonEncode(config.toJson());
-      await file.writeAsString(jsonString);
       _currentConfig = config;
-      logger.info('Configuration saved to file');
+
+      // Save to atProtocol if available
+      if (_atClient != null) {
+        await _saveToAtProtocol(config);
+        logger.info('Configuration saved to atProtocol');
+      } else {
+        logger.info('Configuration cached (will sync when connected)');
+      }
     } catch (e) {
       logger.severe('Failed to save configuration: $e');
       rethrow;
     }
   }
 
-  /// Export configuration as JSON string
+  /// Save configuration to atProtocol
+  Future<void> _saveToAtProtocol(DashboardConfig config) async {
+    try {
+      if (_atClient == null) return;
+
+      final atKey = AtKey()
+        ..key = _atKeyName
+        ..sharedWith = null // Self key
+        ..metadata = (Metadata()..ttr = -1); // Never expire
+
+      final jsonString = jsonEncode(config.toJson());
+      await _atClient!.put(atKey, jsonString);
+    } catch (e) {
+      logger.warning('Failed to save to atProtocol: $e');
+      rethrow;
+    }
+  }
+
+  /// Load configuration from atProtocol
+  Future<DashboardConfig?> _loadFromAtProtocol() async {
+    try {
+      if (_atClient == null) return null;
+
+      final atKey = AtKey()
+        ..key = _atKeyName
+        ..sharedWith = null; // Self key
+
+      final result = await _atClient!.get(atKey);
+      if (result.value == null) return null;
+
+      final jsonData = jsonDecode(result.value) as Map<String, dynamic>;
+      return DashboardConfig.fromJson(jsonData);
+    } catch (e) {
+      logger.warning('Failed to load from atProtocol: $e');
+      return null;
+    }
+  }
+
+  /// Export configuration as JSON string (for manual backup)
   String exportConfigAsJson() {
     final jsonData = config.toJson();
     return const JsonEncoder.withIndent('  ').convert(jsonData);
   }
 
-  /// Import configuration from JSON string
+  /// Import configuration from JSON string (for manual restore)
   Future<DashboardConfig> importConfigFromJson(String jsonString) async {
     try {
       final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
@@ -78,17 +132,5 @@ class ConfigService {
   Future<void> resetToDefaults() async {
     final defaultConfig = DashboardConfig.defaults();
     await saveConfig(defaultConfig);
-  }
-
-  /// Get configuration file
-  Future<File> _getConfigFile() async {
-    final directory = await getApplicationDocumentsDirectory();
-    return File('${directory.path}/$_configFileName');
-  }
-
-  /// Get configuration file path for display
-  Future<String> getConfigFilePath() async {
-    final file = await _getConfigFile();
-    return file.path;
   }
 }

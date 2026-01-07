@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:kryz_shared/kryz_shared.dart';
 import '../services/at_service.dart';
 import '../services/config_service.dart';
 import '../providers/transmitter_provider.dart';
@@ -21,6 +20,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _setupNotificationListeners();
+    _syncConfigWithAtProtocol();
   }
 
   void _setupNotificationListeners() {
@@ -35,6 +35,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
       transmitterProvider.updateAlert(alert);
       _showAlertDialog(alert);
     };
+  }
+
+  void _syncConfigWithAtProtocol() async {
+    // When dashboard loads, connect ConfigService to AtClient and sync
+    final atService = Provider.of<AtService>(context, listen: false);
+    final configService = Provider.of<ConfigService>(context, listen: false);
+
+    if (atService.atClient != null) {
+      configService.setAtClient(atService.atClient);
+      await configService.loadConfig(); // Load from atProtocol
+      if (mounted) {
+        setState(() {}); // Refresh UI with synced config
+      }
+    }
   }
 
   void _showAlertDialog(Map<String, dynamic> alert) {
@@ -74,12 +88,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Settings',
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => SettingsScreen(configService: configService),
                 ),
               );
+              // Refresh the screen when returning from settings
+              if (mounted) {
+                setState(() {});
+              }
             },
           ),
           Consumer<AtService>(
@@ -158,8 +176,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('modulation').minValue,
                         max: config.getConfig('modulation').maxValue,
                         unit: config.getConfig('modulation').unit,
-                        warningThreshold: config.getConfig('modulation').warningThreshold,
-                        criticalThreshold: config.getConfig('modulation').criticalThreshold,
+                        warningLowThreshold: config.getConfig('modulation').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('modulation').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('modulation').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('modulation').criticalHighThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -170,8 +190,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('swr').minValue,
                         max: config.getConfig('swr').maxValue,
                         unit: config.getConfig('swr').unit,
-                        warningThreshold: config.getConfig('swr').warningThreshold,
-                        criticalThreshold: config.getConfig('swr').criticalThreshold,
+                        warningLowThreshold: config.getConfig('swr').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('swr').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('swr').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('swr').criticalHighThreshold,
                       ),
                     ),
                   ],
@@ -188,8 +210,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('powerOut').minValue,
                         max: config.getConfig('powerOut').maxValue,
                         unit: config.getConfig('powerOut').unit,
-                        warningThreshold: config.getConfig('powerOut').warningThreshold,
-                        criticalThreshold: config.getConfig('powerOut').criticalThreshold,
+                        warningLowThreshold: config.getConfig('powerOut').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('powerOut').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('powerOut').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('powerOut').criticalHighThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -200,8 +224,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('powerRef').minValue,
                         max: config.getConfig('powerRef').maxValue,
                         unit: config.getConfig('powerRef').unit,
-                        warningThreshold: config.getConfig('powerRef').warningThreshold,
-                        criticalThreshold: config.getConfig('powerRef').criticalThreshold,
+                        warningLowThreshold: config.getConfig('powerRef').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('powerRef').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('powerRef').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('powerRef').criticalHighThreshold,
                       ),
                     ),
                   ],
@@ -218,8 +244,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('heatTemp').minValue,
                         max: config.getConfig('heatTemp').maxValue,
                         unit: config.getConfig('heatTemp').unit,
-                        warningThreshold: config.getConfig('heatTemp').warningThreshold,
-                        criticalThreshold: config.getConfig('heatTemp').criticalThreshold,
+                        warningLowThreshold: config.getConfig('heatTemp').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('heatTemp').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('heatTemp').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('heatTemp').criticalHighThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -230,8 +258,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('fanSpeed').minValue,
                         max: config.getConfig('fanSpeed').maxValue,
                         unit: config.getConfig('fanSpeed').unit,
-                        warningThreshold: config.getConfig('fanSpeed').warningThreshold,
-                        criticalThreshold: config.getConfig('fanSpeed').criticalThreshold,
+                        warningLowThreshold: config.getConfig('fanSpeed').warningLowThreshold,
+                        criticalLowThreshold: config.getConfig('fanSpeed').criticalLowThreshold,
+                        warningHighThreshold: config.getConfig('fanSpeed').warningHighThreshold,
+                        criticalHighThreshold: config.getConfig('fanSpeed').criticalHighThreshold,
                       ),
                     ),
                   ],

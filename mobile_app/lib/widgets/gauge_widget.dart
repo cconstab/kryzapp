@@ -7,8 +7,10 @@ class GaugeWidget extends StatelessWidget {
   final double min;
   final double max;
   final String unit;
-  final double? warningThreshold;
-  final double? criticalThreshold;
+  final double? warningHighThreshold;
+  final double? criticalHighThreshold;
+  final double? warningLowThreshold;
+  final double? criticalLowThreshold;
   final bool showPointer;
 
   const GaugeWidget({
@@ -18,18 +20,30 @@ class GaugeWidget extends StatelessWidget {
     required this.min,
     required this.max,
     required this.unit,
-    this.warningThreshold,
-    this.criticalThreshold,
+    this.warningHighThreshold,
+    this.criticalHighThreshold,
+    this.warningLowThreshold,
+    this.criticalLowThreshold,
     this.showPointer = false,
   }) : super(key: key);
 
   Color _getValueColor() {
-    if (criticalThreshold != null && value >= criticalThreshold!) {
+    // Check critical thresholds first
+    if (criticalHighThreshold != null && value >= criticalHighThreshold!) {
       return Colors.red;
     }
-    if (warningThreshold != null && value >= warningThreshold!) {
+    if (criticalLowThreshold != null && value <= criticalLowThreshold!) {
+      return Colors.red;
+    }
+
+    // Check warning thresholds
+    if (warningHighThreshold != null && value >= warningHighThreshold!) {
       return Colors.orange;
     }
+    if (warningLowThreshold != null && value <= warningLowThreshold!) {
+      return Colors.orange;
+    }
+
     return Colors.green;
   }
 
@@ -87,25 +101,38 @@ class GaugeWidget extends StatelessWidget {
   List<GaugeRange> _buildRanges() {
     final ranges = <GaugeRange>[];
 
-    if (warningThreshold == null && criticalThreshold == null) {
-      // No thresholds, single green range
+    // No thresholds means all green
+    if (warningHighThreshold == null &&
+        criticalHighThreshold == null &&
+        warningLowThreshold == null &&
+        criticalLowThreshold == null) {
       ranges.add(GaugeRange(startValue: min, endValue: max, color: Colors.green.withOpacity(0.3)));
-    } else {
-      // Build ranges based on thresholds
-      double start = min;
+      return ranges;
+    }
 
-      if (warningThreshold != null) {
-        ranges.add(GaugeRange(startValue: start, endValue: warningThreshold!, color: Colors.green.withOpacity(0.3)));
-        start = warningThreshold!;
-      }
+    // Build ranges based on thresholds
+    // For metrics with both low and high thresholds (e.g., modulation)
+    if (criticalLowThreshold != null) {
+      ranges.add(GaugeRange(startValue: min, endValue: criticalLowThreshold!, color: Colors.red.withOpacity(0.3)));
+    }
 
-      if (criticalThreshold != null) {
-        ranges.add(GaugeRange(startValue: start, endValue: criticalThreshold!, color: Colors.orange.withOpacity(0.3)));
+    if (warningLowThreshold != null) {
+      final start = criticalLowThreshold ?? min;
+      ranges.add(GaugeRange(startValue: start, endValue: warningLowThreshold!, color: Colors.orange.withOpacity(0.3)));
+    }
 
-        ranges.add(GaugeRange(startValue: criticalThreshold!, endValue: max, color: Colors.red.withOpacity(0.3)));
-      } else {
-        ranges.add(GaugeRange(startValue: start, endValue: max, color: Colors.orange.withOpacity(0.3)));
-      }
+    // Green range in the middle
+    final greenStart = warningLowThreshold ?? criticalLowThreshold ?? min;
+    final greenEnd = warningHighThreshold ?? criticalHighThreshold ?? max;
+    ranges.add(GaugeRange(startValue: greenStart, endValue: greenEnd, color: Colors.green.withOpacity(0.3)));
+
+    if (warningHighThreshold != null) {
+      final end = criticalHighThreshold ?? max;
+      ranges.add(GaugeRange(startValue: warningHighThreshold!, endValue: end, color: Colors.orange.withOpacity(0.3)));
+    }
+
+    if (criticalHighThreshold != null) {
+      ranges.add(GaugeRange(startValue: criticalHighThreshold!, endValue: max, color: Colors.red.withOpacity(0.3)));
     }
 
     return ranges;

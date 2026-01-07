@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/at_service.dart';
+import '../services/config_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({Key? key}) : super(key: key);
@@ -63,6 +64,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       final atService = Provider.of<AtService>(context, listen: false);
       await atService.initialize(context);
+
+      // Now that we're connected, give ConfigService the AtClient and reload from atProtocol
+      if (atService.atClient != null) {
+        final configService = Provider.of<ConfigService>(context, listen: false);
+        configService.setAtClient(atService.atClient);
+        await configService.loadConfig(); // Reload to get config from atProtocol
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

@@ -16,7 +16,7 @@ void main() async {
     debugPrint('${record.level.name}: ${record.time}: ${record.message}');
   });
 
-  // Initialize config service
+  // Initialize config service (will load from local first, then sync with atProtocol when connected)
   final configService = ConfigService();
   await configService.loadConfig();
 
