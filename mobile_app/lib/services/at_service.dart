@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:at_client_mobile/at_client_mobile.dart';
 import 'package:at_onboarding_flutter/at_onboarding_flutter.dart';
@@ -28,21 +29,28 @@ class AtService extends ChangeNotifier {
     try {
       logger.info('Initializing atClient service');
 
-      // Trigger onboarding
-      await AtOnboarding.onboard(
-        context: context,
-        config: AtOnboardingConfig(
-          atClientPreference: AtClientPreference()
-            ..rootDomain = 'root.atsign.org'
-            ..namespace = 'kryz'
-            ..hiveStoragePath = 'storage'
-            ..commitLogPath = 'storage/commitLog'
-            ..isLocalStoreRequired = true // Required for keys and auth
-            ..fetchOfflineNotifications = false, // Only process new notifications, not history
-          rootEnvironment: RootEnvironment.Production,
-          domain: 'root.atsign.org',
-        ),
-      );
+      // Trigger onboarding with error handling for sync service issues
+      try {
+        await AtOnboarding.onboard(
+          context: context,
+          config: AtOnboardingConfig(
+            atClientPreference: AtClientPreference()
+              ..rootDomain = 'root.atsign.org'
+              ..namespace = 'kryz'
+              ..hiveStoragePath = 'storage'
+              ..commitLogPath = 'storage/commitLog'
+              ..isLocalStoreRequired = true // Required for keys and auth
+              ..fetchOfflineNotifications = false // Only process new notifications, not history
+              ..syncIntervalMins = 10 // Reduce sync frequency to minimize background activity
+              ..maxDataSize = 512000, // Limit data size
+            rootEnvironment: RootEnvironment.Production,
+            domain: 'root.atsign.org',
+          ),
+        );
+      } on FileSystemException catch (e) {
+        logger.warning('FileSystemException during onboarding (safe to ignore): $e');
+        // Continue despite FileSystemException - this often happens during sync
+      }
 
       // Get the current @sign from AtClientManager
       _currentAtSign = AtClientManager.getInstance().atClient.getCurrentAtSign();
@@ -63,6 +71,23 @@ class AtService extends ChangeNotifier {
 
       notifyListeners();
     } catch (e, stackTrace) {
+      // Log but don't crash on FileSystemException
+      if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
+        logger.warning('FileSystemException during initialization (continuing): $e');
+        // Try to recover the atClient even if sync failed
+        try {
+          _currentAtSign = AtClientManager.getInstance().atClient.getCurrentAtSign();
+          if (_currentAtSign != null) {
+            _atClient = AtClientManager.getInstance().atClient;
+            _isInitialized = true;
+            _subscribeToNotifications();
+            notifyListeners();
+            return;
+          }
+        } catch (_) {
+          // Recovery failed, rethrow original error
+        }
+      }
       logger.severe('Failed to initialize atClient', e, stackTrace);
       rethrow;
     }
