@@ -165,29 +165,59 @@ class SNMPService {
   }
 
   /// Generate simulated stats for testing without actual SNMP device
+  /// Values match the default gauge ranges set in the mobile app
   TransmitterStats _getSimulatedStats() {
     final now = DateTime.now();
     final random = _random.nextInt(100);
 
-    // Simulate realistic KRYZ transmitter values matching real measurements
-    final modulation = 75.0 + (random % 20); // 75-95% (normal range 60-100%)
-    final swr = 1.05 + (random % 10) / 100; // 1.05-1.15 (good range, warn >1.5, error >2.0)
-    final powerOut = 4500.0 + (random % 1000); // 4500-5500W (typical FM transmitter)
-    final powerRef = 20.0 + (random % 30); // 20-50W (reflected power, should be low)
-    final heatTemp = 50.0 + (random % 20); // 50-70°C (normal operating temp)
-    final fanSpeed = 3000.0 + (random % 500); // 3000-3500 RPM (normal cooling)
+    // Simulate values within normal operating ranges (matching gauge defaults)
+    // Modulation: 0-120%, normal 60-104%, warn <60 or >104, critical <50 or >105
+    final modulation = 70.0 + (random % 25); // 70-95% (well within normal green zone)
 
-    // Determine status and alert level based on realistic thresholds
+    // SWR: 1.0-3.5:1, normal <2.0, warn >2.0, critical >2.5
+    final swr = 1.1 + (random % 30) / 100; // 1.1-1.4 (good range, well below warning)
+
+    // Power Out: 0-20W, normal 8-12W, warn <8 or >12, critical <5 or >15
+    final powerOut = 9.0 + (random % 3); // 9-12W (normal operating range)
+
+    // Power Ref: 0-5W, normal <1.0, warn >1.0, critical >2.0
+    final powerRef = 0.3 + (random % 50) / 100; // 0.3-0.8W (good, low reflection)
+
+    // Heat Temp: 0-100°C, normal 15-75°C, warn <15/>75, critical <10/>90
+    final heatTemp = 40.0 + (random % 25); // 40-65°C (normal operating temp)
+
+    // Fan Speed: 0-10000 RPM, normal 6000-8000, warn <6000/>8000, critical <4000/>8500
+    final fanSpeed = 6500.0 + (random % 1000); // 6500-7500 RPM (normal cooling)
+
+    // Determine status and alert level based on default thresholds
     String status = 'ON_AIR';
     String? alertLevel;
 
-    // Critical conditions
-    if (heatTemp > 85.0 || swr > 2.0 || modulation < 50.0 || modulation > 105.0) {
+    // Critical conditions (matching default critical thresholds)
+    if (heatTemp < 10.0 ||
+        heatTemp > 90.0 ||
+        swr > 2.5 ||
+        modulation < 50.0 ||
+        modulation > 105.0 ||
+        powerOut < 5.0 ||
+        powerOut > 15.0 ||
+        powerRef > 2.0 ||
+        fanSpeed < 4000.0 ||
+        fanSpeed > 8500.0) {
       status = 'FAULT';
       alertLevel = 'critical';
     }
-    // Warning conditions
-    else if (heatTemp > 75.0 || swr > 1.5 || modulation < 60.0 || modulation > 100.0 || fanSpeed < 2500.0) {
+    // Warning conditions (matching default warning thresholds)
+    else if (heatTemp < 15.0 ||
+        heatTemp > 75.0 ||
+        swr > 2.0 ||
+        modulation < 60.0 ||
+        modulation > 104.0 ||
+        powerOut < 8.0 ||
+        powerOut > 12.0 ||
+        powerRef > 1.0 ||
+        fanSpeed < 6000.0 ||
+        fanSpeed > 8000.0) {
       alertLevel = 'warning';
     }
 
