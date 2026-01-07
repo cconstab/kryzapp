@@ -164,13 +164,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
 
-                // Gauges - Row 1
-                Row(
-                  children: [
-                    Expanded(
-                      child: GaugeWidget(
+                // Responsive gauge grid
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Determine number of columns based on screen width
+                    int crossAxisCount;
+                    double childAspectRatio;
+
+                    if (constraints.maxWidth > 900) {
+                      crossAxisCount = 3; // 3 columns for medium and wide screens
+                      childAspectRatio = 1.3; // Wider/shorter to fit everything on screen
+                    } else {
+                      crossAxisCount = 2; // 2 columns for narrow screens
+                      childAspectRatio = 0.95; // Slightly taller to prevent overflow
+                    }
+
+                    final gaugeWidgets = [
+                      GaugeWidget(
                         title: 'Modulation',
                         value: stats?.modulation ?? 0,
                         min: config.getConfig('modulation').minValue,
@@ -181,10 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('modulation').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('modulation').criticalHighThreshold,
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: GaugeWidget(
+                      GaugeWidget(
                         title: 'SWR',
                         value: stats?.swr ?? 1.0,
                         min: config.getConfig('swr').minValue,
@@ -195,16 +204,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('swr').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('swr').criticalHighThreshold,
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Gauges - Row 2
-                Row(
-                  children: [
-                    Expanded(
-                      child: GaugeWidget(
+                      GaugeWidget(
                         title: 'Power Out',
                         value: stats?.powerOut ?? 0,
                         min: config.getConfig('powerOut').minValue,
@@ -215,10 +215,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('powerOut').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('powerOut').criticalHighThreshold,
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: GaugeWidget(
+                      GaugeWidget(
                         title: 'Power Ref',
                         value: stats?.powerRef ?? 0,
                         min: config.getConfig('powerRef').minValue,
@@ -229,16 +226,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('powerRef').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('powerRef').criticalHighThreshold,
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Gauges - Row 3
-                Row(
-                  children: [
-                    Expanded(
-                      child: GaugeWidget(
+                      GaugeWidget(
                         title: 'Heat Temp',
                         value: stats?.heatTemp ?? 0,
                         min: config.getConfig('heatTemp').minValue,
@@ -249,10 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('heatTemp').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('heatTemp').criticalHighThreshold,
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: GaugeWidget(
+                      GaugeWidget(
                         title: 'Fan Speed',
                         value: stats?.fanSpeed ?? 0,
                         min: config.getConfig('fanSpeed').minValue,
@@ -263,8 +248,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         warningHighThreshold: config.getConfig('fanSpeed').warningHighThreshold,
                         criticalHighThreshold: config.getConfig('fanSpeed').criticalHighThreshold,
                       ),
-                    ),
-                  ],
+                    ];
+
+                    return GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        childAspectRatio: childAspectRatio,
+                      ),
+                      itemCount: gaugeWidgets.length,
+                      itemBuilder: (context, index) => gaugeWidgets[index],
+                    );
+                  },
                 ),
                 const SizedBox(height: 24),
 

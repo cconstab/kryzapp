@@ -85,10 +85,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Configure the scale and thresholds for each gauge. '
               'Warning threshold should be less than critical threshold.',
-              style: TextStyle(fontSize: 14),
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
             ),
           ],
         ),
@@ -138,7 +138,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Divider(),
-                const Text('Low-Side Thresholds (optional)', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text(
+                  'Low-Side Thresholds (optional)',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _buildNumberField(
                   label: 'Critical Low Threshold',
@@ -161,7 +167,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Divider(),
-                const Text('High-Side Thresholds (optional)', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text(
+                  'High-Side Thresholds (optional)',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _buildNumberField(
                   label: 'Warning High Threshold',
@@ -211,9 +223,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       decoration: InputDecoration(
         labelText: label,
         helperText: helperText,
+        helperStyle: TextStyle(color: Colors.grey.shade600),
         border: const OutlineInputBorder(),
         isDense: true,
       ),
+      style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [
         FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
@@ -239,6 +253,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         border: const OutlineInputBorder(),
         isDense: true,
       ),
+      style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black),
       onChanged: onChanged,
     );
   }

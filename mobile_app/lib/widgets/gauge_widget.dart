@@ -102,46 +102,52 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                SfRadialGauge(
-                  axes: <RadialAxis>[
-                    RadialAxis(
-                      minimum: widget.min,
-                      maximum: widget.max,
-                      showLabels: true,
-                      showTicks: true,
-                      ranges: _buildRanges(),
-                      pointers: <GaugePointer>[
-                        NeedlePointer(
-                          value: animatedValue,
-                          enableAnimation: false, // We handle animation ourselves
-                          needleColor: _getValueColor(animatedValue),
-                        ),
-                      ],
-                      annotations: <GaugeAnnotation>[
-                        GaugeAnnotation(
-                          widget: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                animatedValue.toStringAsFixed(1),
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: _getValueColor(animatedValue),
-                                ),
+                Flexible(
+                  child: AspectRatio(
+                    aspectRatio: 1.0,
+                    child: SfRadialGauge(
+                      axes: <RadialAxis>[
+                        RadialAxis(
+                          minimum: widget.min,
+                          maximum: widget.max,
+                          showLabels: true,
+                          showTicks: true,
+                          ranges: _buildRanges(),
+                          pointers: <GaugePointer>[
+                            NeedlePointer(
+                              value: animatedValue,
+                              enableAnimation: false, // We handle animation ourselves
+                              needleColor: _getValueColor(animatedValue),
+                            ),
+                          ],
+                          annotations: <GaugeAnnotation>[
+                            GaugeAnnotation(
+                              widget: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    animatedValue.toStringAsFixed(1),
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: _getValueColor(animatedValue),
+                                    ),
+                                  ),
+                                  Text(widget.unit, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                                ],
                               ),
-                              Text(widget.unit, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                            ],
-                          ),
-                          angle: 90,
-                          positionFactor: 0.5,
+                              angle: 90,
+                              positionFactor: 0.5,
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
