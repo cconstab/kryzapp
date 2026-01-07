@@ -1,0 +1,40 @@
+name: kryz_mobile
+description: Mobile application for KRYZ transmitter monitoring
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # atPlatform SDK
+  at_client_mobile: ^3.2.0
+  at_onboarding_flutter: ^6.2.0
+  at_utils: ^3.0.0
+  
+  # UI components
+  cupertino_icons: ^1.0.6
+  syncfusion_flutter_gauges: ^24.2.9
+  intl: ^0.19.0
+  
+  # State management
+  provider: ^6.1.1
+  
+  # Utilities
+  logging: ^1.2.0
+  path_provider: ^2.1.2
+  
+  # Shared models
+  kryz_shared:
+    path: ../shared
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true

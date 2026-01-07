@@ -1,0 +1,12 @@
+name: kryz_shared
+description: Shared models and configuration for KRYZ transmitter monitoring system
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  # No external dependencies for shared models
+  
+dev_dependencies:
+  lints: ^3.0.0

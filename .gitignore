@@ -1,0 +1,36 @@
+# Dart/Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# atPlatform keys (IMPORTANT: Never commit these!)
+.atsign/
+*.atKeys
+*_key.atKeys
+keys/
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.exe
