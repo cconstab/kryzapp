@@ -66,7 +66,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final configService = Provider.of<ConfigService>(context);
     final config = configService.config;
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('KRYZ Transmitter Monitor'),

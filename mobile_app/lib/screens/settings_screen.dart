@@ -249,7 +249,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final jsonString = widget.configService.exportConfigAsJson();
       await Clipboard.setData(ClipboardData(text: jsonString));
-      
+
       if (mounted) {
         showDialog(
           context: context,
@@ -304,9 +304,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _importConfig() async {
     final controller = TextEditingController();
-    
+
     if (!mounted) return;
-    
+
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

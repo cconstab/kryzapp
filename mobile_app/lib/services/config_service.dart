@@ -16,7 +16,7 @@ class ConfigService {
   Future<void> loadConfig() async {
     try {
       final file = await _getConfigFile();
-      
+
       if (await file.exists()) {
         final jsonString = await file.readAsString();
         final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;

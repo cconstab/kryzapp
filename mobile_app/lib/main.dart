@@ -9,7 +9,7 @@ import 'providers/transmitter_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Set up logging
   Logger.root.level = Level.ALL;
   Logger.root.onRecord.listen((record) {
@@ -25,7 +25,7 @@ void main() async {
 
 class KryzApp extends StatelessWidget {
   final ConfigService configService;
-  
+
   const KryzApp({Key? key, required this.configService}) : super(key: key);
 
   @override

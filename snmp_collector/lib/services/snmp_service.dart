@@ -1,7 +1,8 @@
 import 'dart:math';
+import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:kryz_shared/kryz_shared.dart';
-import 'package:dart_snmp/dart_snmp.dart';
+import 'package:dart_snmp/dart_snmp.dart' as snmp;
 
 final logger = Logger('SNMPService');
 
@@ -21,7 +22,7 @@ class SNMPService {
   static const String oidFanSpeed = '1.3.6.1.4.1.28142.1.300.256.281.0'; // Fan Speed (RPM)
 
   final Random _random = Random();
-  SnmpClient? _client;
+  dynamic _session;
 
   SNMPService({
     required this.host,
@@ -34,14 +35,17 @@ class SNMPService {
   Future<void> initialize() async {
     if (!useSimulatedData) {
       try {
-        _client = SnmpClient(
-          host: host,
-          port: port,
-          community: community,
-        );
-        logger.info('SNMP client initialized for $host:$port');
-      } catch (e) {
-        logger.severe('Failed to initialize SNMP client: $e');
+        logger.info('Initializing SNMP session for $host:$port with community: $community');
+        
+        // Create InternetAddress from host string
+        final target = InternetAddress(host);
+        
+        // Create session with the target - dart_snmp 3.0.1 API
+        _session = await snmp.Snmp.createSession(target, community: community, port: port);
+        
+        logger.info('SNMP session initialized successfully');
+      } catch (e, stack) {
+        logger.severe('Failed to initialize SNMP session: $e', e, stack);
         rethrow;
       }
     }
@@ -49,14 +53,14 @@ class SNMPService {
 
   /// Collect transmitter statistics via SNMP
   Future<TransmitterStats> collectStats() async {
-    if (useSimulatedData || _client == null) {
+    if (useSimulatedData || _session == null) {
       logger.fine('Using simulated data');
       return _getSimulatedStats();
     }
 
     try {
       logger.fine('Collecting stats from $host:$port via SNMP');
-      
+
       // Query all OIDs
       final modulation = await _queryOid(oidModulation, divisor: 1000);
       final swr = await _queryOid(oidSWR, divisor: 1000);
@@ -64,6 +68,8 @@ class SNMPService {
       final powerRef = await _queryOid(oidPowerRef, divisor: 1000);
       final heatTemp = await _queryOid(oidHeatTemp, divisor: 1000);
       final fanSpeed = await _queryOid(oidFanSpeed, divisor: 1);
+
+      logger.info('SNMP values - Mod: $modulation%, SWR: $swr, PwrOut: ${powerOut}W, PwrRef: ${powerRef}W, Temp: ${heatTemp}°C, Fan: ${fanSpeed}RPM');
 
       // Determine status and alert level
       String status = 'ON_AIR';
@@ -97,16 +103,31 @@ class SNMPService {
   /// Query a single SNMP OID and return the value as double
   Future<double> _queryOid(String oid, {int divisor = 1}) async {
     try {
-      final result = await _client!.get(oid);
+      final oidObj = snmp.Oid.fromString(oid);
+      final message = await _session.get(oidObj);
       
-      if (result != null) {
-        // Convert the value to double, handling different return types
-        final value = result is int ? result.toDouble() : (result is double ? result : 0.0);
-        return value / divisor;
+      if (message.pdu.error.value != 0) {
+        logger.warning('SNMP error for OID $oid: ${message.pdu.error}');
+        return 0.0;
       }
+
+      final varbind = message.pdu.varbinds.first;
       
-      logger.warning('Null value returned for OID $oid');
-      return 0.0;
+      // Extract the integer value from the varbind
+      int intValue = 0;
+      
+      if (varbind.value is int) {
+        intValue = varbind.value as int;
+      } else if (varbind.value is BigInt) {
+        intValue = (varbind.value as BigInt).toInt();
+      } else {
+        logger.warning('Unexpected value type for OID $oid: ${varbind.value.runtimeType}');
+        return 0.0;
+      }
+
+      final result = intValue / divisor;
+      logger.fine('OID $oid = $intValue (raw) / $divisor = $result');
+      return result;
     } catch (e) {
       logger.severe('Failed to query OID $oid: $e');
       return 0.0;
@@ -153,6 +174,7 @@ class SNMPService {
 
   /// Close SNMP session
   void dispose() {
-    _client = null;
+    _session?.close();
+    _session = null;
   }
 }
