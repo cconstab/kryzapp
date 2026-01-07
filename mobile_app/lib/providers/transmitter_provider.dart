@@ -49,17 +49,23 @@ class TransmitterProvider extends ChangeNotifier {
 
     for (final stats in _history.take(limit)) {
       switch (metric) {
-        case 'powerOutput':
-          values.add(stats.powerOutput);
+        case 'modulation':
+          values.add(stats.modulation);
           break;
-        case 'temperature':
-          values.add(stats.temperature);
+        case 'swr':
+          values.add(stats.swr);
           break;
-        case 'vswr':
-          values.add(stats.vswr);
+        case 'powerOut':
+          values.add(stats.powerOut);
           break;
-        case 'frequency':
-          values.add(stats.frequency);
+        case 'powerRef':
+          values.add(stats.powerRef);
+          break;
+        case 'heatTemp':
+          values.add(stats.heatTemp);
+          break;
+        case 'fanSpeed':
+          values.add(stats.fanSpeed);
           break;
       }
     }
