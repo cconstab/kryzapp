@@ -16,7 +16,8 @@ void main(List<String> arguments) async {
   final parser = ArgParser()
     ..addOption('atsign', abbr: 'a', help: 'The @sign for this collector', mandatory: true)
     ..addOption('keys', abbr: 'k', help: 'Path to the .atKeys file (default: ~/.atsign/keys/<atsign>_key.atKeys)')
-    ..addOption('receivers', abbr: 'r', help: 'Comma-separated list of @signs to receive notifications', mandatory: true)
+    ..addOption('receivers',
+        abbr: 'r', help: 'Comma-separated list of @signs to receive notifications', mandatory: true)
     ..addOption('host', abbr: 'h', help: 'SNMP host address', defaultsTo: '127.0.0.1')
     ..addOption('port', abbr: 'p', help: 'SNMP port', defaultsTo: '161')
     ..addOption('community', abbr: 'c', help: 'SNMP community string', defaultsTo: 'public')
@@ -37,12 +38,13 @@ void main(List<String> arguments) async {
       print('');
       print('Example:');
       print('  dart run bin/snmp_collector.dart -a @snmp_collector -r @cconstab,@bob');
-      print('  dart run bin/snmp_collector.dart -a @snmp_collector -k .atsign/@snmp_collector_key.atKeys -r @cconstab,@bob');
+      print(
+          '  dart run bin/snmp_collector.dart -a @snmp_collector -k .atsign/@snmp_collector_key.atKeys -r @cconstab,@bob');
       exit(0);
     }
 
     final atSign = args['atsign'] as String;
-    final keysPath = args['keys'] as String? ?? 
+    final keysPath = args['keys'] as String? ??
         '${Platform.environment['HOME'] ?? Platform.environment['USERPROFILE']}/.atsign/keys/${atSign}_key.atKeys';
     final receiversArg = args['receivers'] as String;
     final receivers = receiversArg.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -68,8 +70,7 @@ void main(List<String> arguments) async {
     );
 
     // Initialize and authenticate
-    await collector.initialize();
-    await collector.authenticate(keysPath);
+    await collector.initialize(keysPath);
 
     // Start collecting
     await collector.start();

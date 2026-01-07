@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:at_client/at_client.dart';
-import 'package:at_chops/at_chops.dart';
+import 'package:at_onboarding_cli/at_onboarding_cli.dart' as cli;
 import '../services/snmp_service.dart';
 import '../services/at_notification_service.dart';
 
@@ -33,25 +32,40 @@ class SNMPCollector {
     this.pollIntervalSeconds = 5,
   });
 
-  /// Initialize atClient and authenticate
-  Future<void> initialize() async {
+  /// Initialize and authenticate using at_onboarding_cli
+  Future<void> initialize(String keysFilePath) async {
     logger.info('Initializing SNMP Collector for $atSign');
 
-    // Initialize atClient using onboarding service
-    final atClientManager = await AtClientManager.getInstance().setCurrentAtSign(
+    // Check if keys file exists
+    final keysFile = File(keysFilePath);
+    if (!await keysFile.exists()) {
+      throw Exception('Keys file not found: $keysFilePath');
+    }
+
+    // Set up atOnboarding preferences
+    final atOnboardingPreference = cli.AtOnboardingPreference()
+      ..rootDomain = 'root.atsign.org'
+      ..namespace = 'kryz'
+      ..hiveStoragePath = '.atsign/storage/$atSign'
+      ..commitLogPath = '.atsign/storage/$atSign/commitLog'
+      ..isLocalStoreRequired = true
+      ..atKeysFilePath = keysFilePath;
+
+    // Use at_onboarding_cli to onboard
+    final atOnboarding = cli.AtOnboardingServiceImpl(
       atSign,
-      'kryz',
-      AtClientPreference()
-        ..rootDomain = 'root.atsign.org'
-        ..namespace = 'kryz'
-        ..hiveStoragePath = '.atsign/storage/$atSign'
-        ..commitLogPath = '.atsign/storage/$atSign/commitLog'
-        ..isLocalStoreRequired = true,
+      atOnboardingPreference,
     );
 
-    atClient = atClientManager.atClient;
+    final result = await atOnboarding.authenticate();
+    if (!result) {
+      throw Exception('Authentication failed for $atSign');
+    }
 
-    logger.info('atClient initialized successfully');
+    // Get the authenticated atClient
+    atClient = AtClientManager.getInstance().atClient;
+
+    logger.info('atClient initialized and authenticated successfully');
 
     // Initialize SNMP service
     snmpService = SNMPService(
@@ -64,43 +78,6 @@ class SNMPCollector {
     notificationService = AtNotificationService(atClient: atClient);
 
     logger.info('Initialization complete');
-  }
-
-  /// Authenticate using .atKeys file
-  Future<void> authenticate(String keysFilePath) async {
-    logger.info('Authenticating $atSign');
-
-    // Read keys file
-    final keysFile = File(keysFilePath);
-    if (!await keysFile.exists()) {
-      throw Exception('Keys file not found: $keysFilePath');
-    }
-
-    final atKeysData = await keysFile.readAsString();
-    final atKeysMap = jsonDecode(atKeysData) as Map<String, dynamic>;
-
-    // Create AtChopsKeys from the atKeys file
-    final atEncryptionKeyPair = AtEncryptionKeyPair.create(
-      atKeysMap[AtConstants.atEncryptionPublicKey]!,
-      atKeysMap[AtConstants.atEncryptionPrivateKey]!,
-    );
-
-    final atPkamKeyPair = AtPkamKeyPair.create(
-      atKeysMap[AtConstants.atPkamPublicKey]!,
-      atKeysMap[AtConstants.atPkamPrivateKey]!,
-    );
-
-    final selfEncryptionKey = atKeysMap[AtConstants.atEncryptionSelfKey]!;
-
-    final atChopsKeys = AtChopsKeys.create(atEncryptionKeyPair, atPkamKeyPair);
-    if (selfEncryptionKey != null) {
-      atChopsKeys.selfEncryptionKey = AESKey(selfEncryptionKey);
-    }
-
-    final atChops = AtChopsImpl(atChopsKeys);
-    atClient.atChops = atChops;
-
-    logger.info('Authentication successful');
   }
 
   /// Start collecting and sending notifications
