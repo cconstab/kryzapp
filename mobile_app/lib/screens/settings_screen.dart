@@ -15,11 +15,19 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late DashboardConfig _config;
   bool _hasChanges = false;
+  late TextEditingController _stationNameController;
 
   @override
   void initState() {
     super.initState();
     _config = widget.configService.config;
+    _stationNameController = TextEditingController(text: _config.stationName);
+  }
+
+  @override
+  void dispose() {
+    _stationNameController.dispose();
+    super.dispose();
   }
 
   @override
@@ -56,6 +64,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           _buildInfoCard(),
           const SizedBox(height: 16),
+          _buildStationNameCard(),
+          const SizedBox(height: 16),
           ..._config.gauges.entries.map((entry) => _buildGaugeConfigCard(entry.key, entry.value)),
         ],
       ),
@@ -89,6 +99,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'Configure the scale and thresholds for each gauge. '
               'Warning threshold should be less than critical threshold.',
               style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStationNameCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.radio),
+                const SizedBox(width: 8),
+                Text(
+                  'Station Name',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: InputDecoration(
+                labelText: 'Station Name',
+                hintText: 'e.g., KRYZ-TX-001',
+                helperText: 'This will be displayed on the dashboard',
+                helperStyle: TextStyle(color: Colors.grey.shade600),
+                border: const OutlineInputBorder(),
+              ),
+              controller: _stationNameController,
+              onChanged: (value) {
+                setState(() {
+                  _config = _config.copyWith(stationName: value.trim());
+                  _hasChanges = true;
+                });
+              },
             ),
           ],
         ),

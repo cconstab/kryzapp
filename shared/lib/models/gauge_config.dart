@@ -143,11 +143,16 @@ class GaugeConfig {
 /// Container for all gauge configurations
 class DashboardConfig {
   final Map<String, GaugeConfig> gauges;
+  final String stationName;
 
-  DashboardConfig({required this.gauges});
+  DashboardConfig({
+    required this.gauges,
+    this.stationName = 'KRYZ-TX-001',
+  });
 
   Map<String, dynamic> toJson() => {
         'gauges': gauges.map((key, value) => MapEntry(key, value.toJson())),
+        'stationName': stationName,
       };
 
   factory DashboardConfig.fromJson(Map<String, dynamic> json) {
@@ -155,14 +160,30 @@ class DashboardConfig {
     final gauges = gaugesJson.map(
       (key, value) => MapEntry(key, GaugeConfig.fromJson(value as Map<String, dynamic>)),
     );
-    return DashboardConfig(gauges: gauges);
+    return DashboardConfig(
+      gauges: gauges,
+      stationName: json['stationName'] as String? ?? 'KRYZ-TX-001',
+    );
   }
 
   factory DashboardConfig.defaults() {
-    return DashboardConfig(gauges: GaugeConfig.getDefaults());
+    return DashboardConfig(
+      gauges: GaugeConfig.getDefaults(),
+      stationName: 'KRYZ-TX-001',
+    );
   }
 
   GaugeConfig getConfig(String metricName) {
     return gauges[metricName] ?? GaugeConfig.getDefaults()[metricName]!;
+  }
+
+  DashboardConfig copyWith({
+    Map<String, GaugeConfig>? gauges,
+    String? stationName,
+  }) {
+    return DashboardConfig(
+      gauges: gauges ?? this.gauges,
+      stationName: stationName ?? this.stationName,
+    );
   }
 }

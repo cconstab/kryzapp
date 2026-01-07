@@ -3,8 +3,13 @@ import 'package:kryz_shared/kryz_shared.dart';
 
 class StatusCard extends StatelessWidget {
   final TransmitterStats stats;
+  final String? stationName;
 
-  const StatusCard({Key? key, required this.stats}) : super(key: key);
+  const StatusCard({
+    Key? key,
+    required this.stats,
+    this.stationName,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +26,7 @@ class StatusCard extends StatelessWidget {
                 Icon(_getStatusIcon(), size: 32, color: Colors.white),
                 const SizedBox(width: 12),
                 Text(
-                  stats.transmitterId,
+                  stationName ?? stats.transmitterId,
                   style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
               ],

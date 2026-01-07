@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 import '../services/at_service.dart';
 import '../services/config_service.dart';
 import '../providers/transmitter_provider.dart';
@@ -16,11 +17,29 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  Timer? _clockTimer;
+
   @override
   void initState() {
     super.initState();
     _setupNotificationListeners();
     _syncConfigWithAtProtocol();
+    _startClockTimer();
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startClockTimer() {
+    // Update the UI every half second to keep the clock smooth
+    _clockTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   void _setupNotificationListeners() {
@@ -80,10 +99,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final configService = Provider.of<ConfigService>(context);
     final config = configService.config;
+    final now = DateTime.now();
+    final timeFormat = DateFormat('HH:mm:ss');
+    final dateFormat = DateFormat('MMM dd, yyyy');
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('KRYZ Transmitter Monitor'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('KRYZ Transmitter Monitor', style: TextStyle(fontSize: 18)),
+            Text(
+              '${dateFormat.format(now)} • ${timeFormat.format(now)}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -122,7 +153,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 // Status card or waiting message
                 if (hasData && stats != null)
-                  StatusCard(stats: stats)
+                  StatusCard(stats: stats, stationName: config.stationName)
                 else if (provider.isDataStale)
                   Card(
                     elevation: 4,
