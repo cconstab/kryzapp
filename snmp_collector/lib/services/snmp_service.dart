@@ -61,13 +61,42 @@ class SNMPService {
     try {
       logger.fine('Collecting stats from $host:$port via SNMP');
 
-      // Query all OIDs
+      // Query all OIDs SYNCHRONOUSLY to avoid overloading SNMP server
       final modulation = await _queryOid(oidModulation, divisor: 1000);
+      if (modulation == null) {
+        logger.warning('Failed to get modulation value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
+
       final swr = await _queryOid(oidSWR, divisor: 1000);
+      if (swr == null) {
+        logger.warning('Failed to get SWR value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
+
       final powerOut = await _queryOid(oidPowerOut, divisor: 1000);
+      if (powerOut == null) {
+        logger.warning('Failed to get power out value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
+
       final powerRef = await _queryOid(oidPowerRef, divisor: 1000);
+      if (powerRef == null) {
+        logger.warning('Failed to get power ref value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
+
       final heatTemp = await _queryOid(oidHeatTemp, divisor: 1000);
+      if (heatTemp == null) {
+        logger.warning('Failed to get heat temp value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
+
       final fanSpeed = await _queryOid(oidFanSpeed, divisor: 1);
+      if (fanSpeed == null) {
+        logger.warning('Failed to get fan speed value, skipping this collection cycle');
+        throw Exception('SNMP query failed - no valid data');
+      }
 
       logger.info(
           'SNMP values - Mod: $modulation%, SWR: $swr, PwrOut: ${powerOut}W, PwrRef: ${powerRef}W, Temp: ${heatTemp}°C, Fan: ${fanSpeed}RPM');
@@ -96,20 +125,20 @@ class SNMPService {
         alertLevel: alertLevel,
       );
     } catch (e) {
-      logger.warning('SNMP query failed, using simulated data: $e');
-      return _getSimulatedStats();
+      logger.warning('SNMP query failed - NOT sending data: $e');
+      rethrow; // Don't send zeros, just skip this collection cycle
     }
   }
 
-  /// Query a single SNMP OID and return the value as double
-  Future<double> _queryOid(String oid, {int divisor = 1}) async {
+  /// Query a single SNMP OID and return the value as double, or null if failed
+  Future<double?> _queryOid(String oid, {int divisor = 1}) async {
     try {
       final oidObj = snmp.Oid.fromString(oid);
       final message = await _session.get(oidObj);
 
       if (message.pdu.error.value != 0) {
         logger.warning('SNMP error for OID $oid: ${message.pdu.error}');
-        return 0.0;
+        return null; // Return null instead of 0.0 to indicate failure
       }
 
       final varbind = message.pdu.varbinds.first;
@@ -123,7 +152,7 @@ class SNMPService {
         intValue = (varbind.value as BigInt).toInt();
       } else {
         logger.warning('Unexpected value type for OID $oid: ${varbind.value.runtimeType}');
-        return 0.0;
+        return null; // Return null instead of 0.0 to indicate failure
       }
 
       final result = intValue / divisor;
@@ -131,7 +160,7 @@ class SNMPService {
       return result;
     } catch (e) {
       logger.severe('Failed to query OID $oid: $e');
-      return 0.0;
+      return null; // Return null instead of 0.0 to indicate failure
     }
   }
 
