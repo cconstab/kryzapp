@@ -15,6 +15,7 @@ class SNMPCollector {
   final int transmitterPort;
   final String community;
   final int pollIntervalSeconds;
+  final bool useSimulatedData;
 
   late AtClient atClient;
   late SNMPService snmpService;
@@ -30,6 +31,7 @@ class SNMPCollector {
     this.transmitterPort = 161,
     this.community = 'public',
     this.pollIntervalSeconds = 5,
+    this.useSimulatedData = true,
   });
 
   /// Initialize and authenticate using at_onboarding_cli
@@ -72,7 +74,16 @@ class SNMPCollector {
       host: transmitterHost,
       port: transmitterPort,
       community: community,
+      useSimulatedData: useSimulatedData,
     );
+
+    // Initialize SNMP session if using real data
+    if (!useSimulatedData) {
+      await snmpService.initialize();
+      logger.info('SNMP session initialized for real data collection');
+    } else {
+      logger.info('Using simulated SNMP data');
+    }
 
     // Initialize notification service
     notificationService = AtNotificationService(atClient: atClient);

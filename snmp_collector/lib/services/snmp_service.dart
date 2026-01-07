@@ -1,15 +1,16 @@
 import 'dart:math';
 import 'package:logging/logging.dart';
 import 'package:kryz_shared/kryz_shared.dart';
+import 'package:dart_snmp/dart_snmp.dart';
 
 final logger = Logger('SNMPService');
 
 /// Service for collecting transmitter stats via SNMP
-/// Note: Currently uses simulated data. For real SNMP, configure dart_snmp properly.
 class SNMPService {
   final String host;
   final int port;
   final String community;
+  final bool useSimulatedData;
 
   // KRYZ Transmitter SNMP OIDs
   static const String oidModulation = '1.3.6.1.4.1.28142.1.300.1025.291.0'; // Div Peak (%)
@@ -20,24 +21,95 @@ class SNMPService {
   static const String oidFanSpeed = '1.3.6.1.4.1.28142.1.300.256.281.0'; // Fan Speed (RPM)
 
   final Random _random = Random();
+  SnmpClient? _client;
 
   SNMPService({
     required this.host,
     required this.port,
     required this.community,
+    this.useSimulatedData = false,
   });
 
+  /// Initialize SNMP session
+  Future<void> initialize() async {
+    if (!useSimulatedData) {
+      try {
+        _client = SnmpClient(
+          host: host,
+          port: port,
+          community: community,
+        );
+        logger.info('SNMP client initialized for $host:$port');
+      } catch (e) {
+        logger.severe('Failed to initialize SNMP client: $e');
+        rethrow;
+      }
+    }
+  }
+
   /// Collect transmitter statistics via SNMP
-  /// Currently returns simulated data for demonstration
   Future<TransmitterStats> collectStats() async {
+    if (useSimulatedData || _client == null) {
+      logger.fine('Using simulated data');
+      return _getSimulatedStats();
+    }
+
     try {
-      // TODO: Implement real SNMP queries when transmitter is available
-      // For now, return simulated data
-      logger.fine('Collecting stats from $host:$port (simulated)');
-      return _getSimulatedStats();
+      logger.fine('Collecting stats from $host:$port via SNMP');
+      
+      // Query all OIDs
+      final modulation = await _queryOid(oidModulation, divisor: 1000);
+      final swr = await _queryOid(oidSWR, divisor: 1000);
+      final powerOut = await _queryOid(oidPowerOut, divisor: 1000);
+      final powerRef = await _queryOid(oidPowerRef, divisor: 1000);
+      final heatTemp = await _queryOid(oidHeatTemp, divisor: 1000);
+      final fanSpeed = await _queryOid(oidFanSpeed, divisor: 1);
+
+      // Determine status and alert level
+      String status = 'ON_AIR';
+      String? alertLevel;
+
+      if (heatTemp > 90.0 || swr > 3.0) {
+        status = 'FAULT';
+        alertLevel = 'critical';
+      } else if (heatTemp > 75.0 || swr > 1.8) {
+        alertLevel = 'warning';
+      }
+
+      return TransmitterStats(
+        transmitterId: 'KRYZ-TX-001',
+        timestamp: DateTime.now(),
+        modulation: modulation,
+        swr: swr,
+        powerOut: powerOut,
+        powerRef: powerRef,
+        heatTemp: heatTemp,
+        fanSpeed: fanSpeed,
+        status: status,
+        alertLevel: alertLevel,
+      );
     } catch (e) {
-      logger.warning('SNMP query failed, returning simulated data: $e');
+      logger.warning('SNMP query failed, using simulated data: $e');
       return _getSimulatedStats();
+    }
+  }
+
+  /// Query a single SNMP OID and return the value as double
+  Future<double> _queryOid(String oid, {int divisor = 1}) async {
+    try {
+      final result = await _client!.get(oid);
+      
+      if (result != null) {
+        // Convert the value to double, handling different return types
+        final value = result is int ? result.toDouble() : (result is double ? result : 0.0);
+        return value / divisor;
+      }
+      
+      logger.warning('Null value returned for OID $oid');
+      return 0.0;
+    } catch (e) {
+      logger.severe('Failed to query OID $oid: $e');
+      return 0.0;
     }
   }
 
@@ -77,5 +149,10 @@ class SNMPService {
       status: status,
       alertLevel: alertLevel,
     );
+  }
+
+  /// Close SNMP session
+  void dispose() {
+    _client = null;
   }
 }

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:kryz_shared/kryz_shared.dart';
 import '../services/at_service.dart';
+import '../services/config_service.dart';
 import '../providers/transmitter_provider.dart';
 import '../widgets/gauge_widget.dart';
 import '../widgets/status_card.dart';
+import 'settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({Key? key}) : super(key: key);
@@ -61,10 +64,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final configService = Provider.of<ConfigService>(context);
+    final config = configService.config;
+    
     return Scaffold(
       appBar: AppBar(
         title: const Text('KRYZ Transmitter Monitor'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => SettingsScreen(configService: configService),
+                ),
+              );
+            },
+          ),
           Consumer<AtService>(
             builder: (context, atService, child) {
               return Padding(
@@ -138,11 +155,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'Modulation',
                         value: stats?.modulation ?? 0,
-                        min: 0,
-                        max: 100,
-                        unit: '%',
-                        warningThreshold: 95,
-                        criticalThreshold: 98,
+                        min: config.getConfig('modulation').minValue,
+                        max: config.getConfig('modulation').maxValue,
+                        unit: config.getConfig('modulation').unit,
+                        warningThreshold: config.getConfig('modulation').warningThreshold,
+                        criticalThreshold: config.getConfig('modulation').criticalThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -150,11 +167,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'SWR',
                         value: stats?.swr ?? 1.0,
-                        min: 1.0,
-                        max: 5.0,
-                        unit: ':1',
-                        warningThreshold: 1.8,
-                        criticalThreshold: 3.0,
+                        min: config.getConfig('swr').minValue,
+                        max: config.getConfig('swr').maxValue,
+                        unit: config.getConfig('swr').unit,
+                        warningThreshold: config.getConfig('swr').warningThreshold,
+                        criticalThreshold: config.getConfig('swr').criticalThreshold,
                       ),
                     ),
                   ],
@@ -168,11 +185,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'Power Out',
                         value: stats?.powerOut ?? 0,
-                        min: 0,
-                        max: 6000,
-                        unit: 'W',
-                        warningThreshold: 5000,
-                        criticalThreshold: 5500,
+                        min: config.getConfig('powerOut').minValue,
+                        max: config.getConfig('powerOut').maxValue,
+                        unit: config.getConfig('powerOut').unit,
+                        warningThreshold: config.getConfig('powerOut').warningThreshold,
+                        criticalThreshold: config.getConfig('powerOut').criticalThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -180,11 +197,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'Power Ref',
                         value: stats?.powerRef ?? 0,
-                        min: 0,
-                        max: 200,
-                        unit: 'W',
-                        warningThreshold: 100,
-                        criticalThreshold: 150,
+                        min: config.getConfig('powerRef').minValue,
+                        max: config.getConfig('powerRef').maxValue,
+                        unit: config.getConfig('powerRef').unit,
+                        warningThreshold: config.getConfig('powerRef').warningThreshold,
+                        criticalThreshold: config.getConfig('powerRef').criticalThreshold,
                       ),
                     ),
                   ],
@@ -198,11 +215,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'Heat Temp',
                         value: stats?.heatTemp ?? 0,
-                        min: 0,
-                        max: 120,
-                        unit: '°C',
-                        warningThreshold: 75,
-                        criticalThreshold: 90,
+                        min: config.getConfig('heatTemp').minValue,
+                        max: config.getConfig('heatTemp').maxValue,
+                        unit: config.getConfig('heatTemp').unit,
+                        warningThreshold: config.getConfig('heatTemp').warningThreshold,
+                        criticalThreshold: config.getConfig('heatTemp').criticalThreshold,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -210,11 +227,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: GaugeWidget(
                         title: 'Fan Speed',
                         value: stats?.fanSpeed ?? 0,
-                        min: 0,
-                        max: 5000,
-                        unit: 'RPM',
-                        warningThreshold: 4000,
-                        criticalThreshold: 4500,
+                        min: config.getConfig('fanSpeed').minValue,
+                        max: config.getConfig('fanSpeed').maxValue,
+                        unit: config.getConfig('fanSpeed').unit,
+                        warningThreshold: config.getConfig('fanSpeed').warningThreshold,
+                        criticalThreshold: config.getConfig('fanSpeed').criticalThreshold,
                       ),
                     ),
                   ],

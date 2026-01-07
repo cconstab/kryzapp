@@ -22,6 +22,7 @@ void main(List<String> arguments) async {
     ..addOption('port', abbr: 'p', help: 'SNMP port', defaultsTo: '161')
     ..addOption('community', abbr: 'c', help: 'SNMP community string', defaultsTo: 'public')
     ..addOption('interval', abbr: 'i', help: 'Poll interval in seconds', defaultsTo: '5')
+    ..addFlag('simulated', abbr: 's', help: 'Use simulated data instead of real SNMP queries', defaultsTo: true)
     ..addFlag('help', negatable: false, help: 'Show this help message');
 
   try {
@@ -52,11 +53,13 @@ void main(List<String> arguments) async {
     final port = int.parse(args['port'] as String);
     final community = args['community'] as String;
     final interval = int.parse(args['interval'] as String);
+    final useSimulated = args['simulated'] as bool;
 
     logger.info('Starting KRYZ SNMP Collector');
     logger.info('@sign: $atSign');
     logger.info('Keys file: $keysPath');
     logger.info('SNMP host: $host:$port');
+    logger.info('Data mode: ${useSimulated ? "SIMULATED" : "REAL SNMP"}');
     logger.info('Receivers: ${receivers.join(", ")}');
 
     // Create collector
@@ -67,6 +70,7 @@ void main(List<String> arguments) async {
       transmitterPort: port,
       community: community,
       pollIntervalSeconds: interval,
+      useSimulatedData: useSimulated,
     );
 
     // Initialize and authenticate
