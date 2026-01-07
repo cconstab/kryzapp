@@ -78,60 +78,62 @@ class GaugeConfig {
     return {
       'modulation': GaugeConfig(
         metricName: 'modulation',
-        minValue: 0,
-        maxValue: 120,
-        warningLowThreshold: 60, // Warning if below 60%
-        criticalLowThreshold: 50, // Critical if below 50%
-        warningHighThreshold: 100, // Warning if above 100%
-        criticalHighThreshold: 105, // Critical if above 105%
+        minValue: 0.0,
+        maxValue: 120.0,
+        warningLowThreshold: 60.0,
+        criticalLowThreshold: 50.0,
+        warningHighThreshold: 104.0,
+        criticalHighThreshold: 105.0,
         unit: '%',
       ),
       'swr': GaugeConfig(
         metricName: 'swr',
         minValue: 1.0,
-        maxValue: 5.0,
-        warningLowThreshold: null, // SWR can't be too low (1.0 is perfect)
+        maxValue: 3.5,
+        warningLowThreshold: null,
         criticalLowThreshold: null,
-        warningHighThreshold: 1.5,
-        criticalHighThreshold: 2.0,
+        warningHighThreshold: 2.0,
+        criticalHighThreshold: 2.5,
         unit: ':1',
       ),
       'powerOut': GaugeConfig(
         metricName: 'powerOut',
-        minValue: 0,
-        maxValue: 6000,
-        warningLowThreshold: 4000, // Warning if power drops too low
-        criticalLowThreshold: 3000, // Critical if power very low
-        warningHighThreshold: 5000,
-        criticalHighThreshold: 5500,
+        minValue: 0.0,
+        maxValue: 20.0,
+        warningLowThreshold: 8.0,
+        criticalLowThreshold: 5.0,
+        warningHighThreshold: 12.0,
+        criticalHighThreshold: 15.0,
         unit: 'W',
       ),
       'powerRef': GaugeConfig(
         metricName: 'powerRef',
-        minValue: 0,
-        maxValue: 200,
-        warningLowThreshold: null, // Reflected power low is good
+        minValue: 0.0,
+        maxValue: 5.0,
+        warningLowThreshold: null,
         criticalLowThreshold: null,
-        warningHighThreshold: 100,
-        criticalHighThreshold: 150,
+        warningHighThreshold: 1.0,
+        criticalHighThreshold: 2.0,
         unit: 'W',
       ),
       'heatTemp': GaugeConfig(
         metricName: 'heatTemp',
-        minValue: 0,
-        maxValue: 120,
-        warningLowThreshold: null, // Low temp is fine
-        criticalLowThreshold: null,
-        warningHighThreshold: 75,
-        criticalHighThreshold: 90,
+        minValue: 0.0,
+        maxValue: 100.0,
+        warningLowThreshold: 15.0,
+        criticalLowThreshold: 10.0,
+        warningHighThreshold: 75.0,
+        criticalHighThreshold: 90.0,
         unit: '°C',
       ),
       'fanSpeed': GaugeConfig(
         metricName: 'fanSpeed',
-        minValue: 0,
-        maxValue: 5000,
-        warningLowThreshold: 2000, // Warning if fan too slow
-        criticalLowThreshold: 1500, // Critical if fan too slow
+        minValue: 0.0,
+        maxValue: 10000.0,
+        warningLowThreshold: 6000.0,
+        criticalLowThreshold: 4000.0,
+        warningHighThreshold: 8000.0,
+        criticalHighThreshold: 8500.0,
         unit: 'RPM',
       ),
     };
