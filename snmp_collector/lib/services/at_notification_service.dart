@@ -77,7 +77,7 @@ class AtNotificationService {
       ..sharedWith = receiver
       ..metadata = (Metadata()
         ..isPublic = false
-        ..isEncrypted = true
+        ..isEncrypted = true // Tell atPlatform to encrypt the data
         ..ttl = 86400000); // 24 hours
 
     final notificationParams = NotificationParams.forUpdate(
@@ -95,17 +95,17 @@ class AtNotificationService {
     if (stats.status == 'FAULT') {
       return 'TRANSMITTER FAULT: ${stats.transmitterId}';
     }
-    if (stats.temperature > 90.0) {
-      return 'CRITICAL: Temperature ${stats.temperature}°C exceeds limit';
+    if (stats.heatTemp > 90.0) {
+      return 'CRITICAL: Heat Sink Temperature ${stats.heatTemp}°C exceeds limit';
     }
-    if (stats.vswr > 3.0) {
-      return 'CRITICAL: VSWR ${stats.vswr} exceeds safe limit';
+    if (stats.swr > 3.0) {
+      return 'CRITICAL: SWR ${stats.swr} exceeds safe limit';
     }
-    if (stats.temperature > 75.0) {
-      return 'WARNING: High temperature ${stats.temperature}°C';
+    if (stats.heatTemp > 75.0) {
+      return 'WARNING: High heat sink temperature ${stats.heatTemp}°C';
     }
-    if (stats.vswr > 1.8) {
-      return 'WARNING: Elevated VSWR ${stats.vswr}';
+    if (stats.swr > 1.8) {
+      return 'WARNING: Elevated SWR ${stats.swr}';
     }
     return 'Alert: Check transmitter status';
   }

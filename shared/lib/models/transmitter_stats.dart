@@ -2,22 +2,26 @@
 class TransmitterStats {
   final String transmitterId;
   final DateTime timestamp;
-  final double powerOutput; // Watts
-  final double temperature; // Celsius
-  final double vswr; // Voltage Standing Wave Ratio
-  final double frequency; // MHz
+  final double modulation; // Modulation percentage (%)
+  final double swr; // Standing Wave Ratio
+  final double powerOut; // Power Output (Watts)
+  final double powerRef; // Power Reflected (Watts)
+  final double heatTemp; // Heat Sink Temperature (°C)
+  final double fanSpeed; // Fan Speed (RPM)
   final String status; // ON_AIR, STANDBY, FAULT
-  final Map<String, dynamic>? additionalMetrics;
+  final String? alertLevel; // Optional alert level
 
   TransmitterStats({
     required this.transmitterId,
     required this.timestamp,
-    required this.powerOutput,
-    required this.temperature,
-    required this.vswr,
-    required this.frequency,
+    required this.modulation,
+    required this.swr,
+    required this.powerOut,
+    required this.powerRef,
+    required this.heatTemp,
+    required this.fanSpeed,
     required this.status,
-    this.additionalMetrics,
+    this.alertLevel,
   });
 
   /// Convert to JSON for atPlatform transmission
@@ -25,12 +29,14 @@ class TransmitterStats {
     return {
       'transmitterId': transmitterId,
       'timestamp': timestamp.toIso8601String(),
-      'powerOutput': powerOutput,
-      'temperature': temperature,
-      'vswr': vswr,
-      'frequency': frequency,
+      'modulation': modulation,
+      'swr': swr,
+      'powerOut': powerOut,
+      'powerRef': powerRef,
+      'heatTemp': heatTemp,
+      'fanSpeed': fanSpeed,
       'status': status,
-      'additionalMetrics': additionalMetrics,
+      'alertLevel': alertLevel,
     };
   }
 
@@ -39,36 +45,38 @@ class TransmitterStats {
     return TransmitterStats(
       transmitterId: json['transmitterId'] as String,
       timestamp: DateTime.parse(json['timestamp'] as String),
-      powerOutput: (json['powerOutput'] as num).toDouble(),
-      temperature: (json['temperature'] as num).toDouble(),
-      vswr: (json['vswr'] as num).toDouble(),
-      frequency: (json['frequency'] as num).toDouble(),
+      modulation: (json['modulation'] as num).toDouble(),
+      swr: (json['swr'] as num).toDouble(),
+      powerOut: (json['powerOut'] as num).toDouble(),
+      powerRef: (json['powerRef'] as num).toDouble(),
+      heatTemp: (json['heatTemp'] as num).toDouble(),
+      fanSpeed: (json['fanSpeed'] as num).toDouble(),
       status: json['status'] as String,
-      additionalMetrics: json['additionalMetrics'] as Map<String, dynamic>?,
+      alertLevel: json['alertLevel'] as String?,
     );
   }
 
   @override
   String toString() {
-    return 'TransmitterStats(id: $transmitterId, power: ${powerOutput}W, '
-        'temp: ${temperature}°C, vswr: $vswr, freq: ${frequency}MHz, status: $status)';
+    return 'TransmitterStats(id: $transmitterId, powerOut: ${powerOut}W, powerRef: ${powerRef}W, '
+        'swr: $swr, modulation: $modulation%, heatTemp: ${heatTemp}°C, fanSpeed: ${fanSpeed}RPM, status: $status)';
   }
 
   /// Check if transmitter is in healthy state
   bool get isHealthy {
     return status == 'ON_AIR' &&
-        temperature < 80.0 && // Below 80°C
-        vswr < 2.0 && // VSWR below 2:1
-        powerOutput > 0;
+        heatTemp < 80.0 && // Below 80°C
+        swr < 2.0 && // SWR below 2:1
+        powerOut > 0;
   }
 
-  /// Get alert level: null (ok), 'warning', 'critical'
-  String? get alertLevel {
+  /// Calculate alert level: null (ok), 'warning', 'critical'
+  String? calculateAlertLevel() {
     if (status == 'FAULT') return 'critical';
-    if (temperature > 90.0) return 'critical';
-    if (vswr > 3.0) return 'critical';
-    if (temperature > 75.0) return 'warning';
-    if (vswr > 1.8) return 'warning';
+    if (heatTemp > 90.0) return 'critical';
+    if (swr > 3.0) return 'critical';
+    if (heatTemp > 75.0) return 'warning';
+    if (swr > 1.8) return 'warning';
     return null;
   }
 }

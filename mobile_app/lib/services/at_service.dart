@@ -75,7 +75,7 @@ class AtService extends ChangeNotifier {
 
     logger.info('Subscribing to notifications');
 
-    _notificationSubscription = _atClient!.notificationService.subscribe(regex: '.*kryz').listen(
+    _notificationSubscription = _atClient!.notificationService.subscribe(regex: '.*kryz', shouldDecrypt: true).listen(
       (notification) {
         _handleNotification(notification);
       },
@@ -89,12 +89,19 @@ class AtService extends ChangeNotifier {
   void _handleNotification(AtNotification notification) {
     try {
       logger.info('Received notification: ${notification.key}');
+      logger.fine(
+          'Notification details - key: ${notification.key}, value: ${notification.value}, from: ${notification.from}');
 
       final key = notification.key;
-      final value = notification.value;
+      var value = notification.value;
 
-      if (value == null) return;
+      if (value == null || value.isEmpty) {
+        logger.warning('Notification value is null or empty');
+        return;
+      }
 
+      // The atPlatform handles encryption/decryption automatically
+      // We should receive plain JSON here
       if (key.contains(NotificationKeys.transmitterStats)) {
         // Parse transmitter stats
         final Map<String, dynamic> jsonData = jsonDecode(value);
@@ -110,7 +117,7 @@ class AtService extends ChangeNotifier {
         onAlertReceived?.call(alertData);
       }
     } catch (e, stackTrace) {
-      logger.severe('Failed to handle notification', e, stackTrace);
+      logger.severe('Failed to handle notification: $e', e, stackTrace);
     }
   }
 

@@ -131,42 +131,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 const SizedBox(height: 16),
 
-                // Gauges
+                // Gauges - Row 1
                 Row(
                   children: [
                     Expanded(
                       child: GaugeWidget(
-                        title: 'Power Output',
-                        value: stats?.powerOutput ?? 0,
+                        title: 'Modulation',
+                        value: stats?.modulation ?? 0,
                         min: 0,
-                        max: 6000,
-                        unit: 'W',
-                        warningThreshold: 4500,
-                        criticalThreshold: 5500,
+                        max: 100,
+                        unit: '%',
+                        warningThreshold: 95,
+                        criticalThreshold: 98,
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: GaugeWidget(
-                        title: 'Temperature',
-                        value: stats?.temperature ?? 0,
-                        min: 0,
-                        max: 120,
-                        unit: '°C',
-                        warningThreshold: 75,
-                        criticalThreshold: 90,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: GaugeWidget(
-                        title: 'VSWR',
-                        value: stats?.vswr ?? 1.0,
+                        title: 'SWR',
+                        value: stats?.swr ?? 1.0,
                         min: 1.0,
                         max: 5.0,
                         unit: ':1',
@@ -174,52 +157,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         criticalThreshold: 3.0,
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Gauges - Row 2
+                Row(
+                  children: [
+                    Expanded(
+                      child: GaugeWidget(
+                        title: 'Power Out',
+                        value: stats?.powerOut ?? 0,
+                        min: 0,
+                        max: 6000,
+                        unit: 'W',
+                        warningThreshold: 5000,
+                        criticalThreshold: 5500,
+                      ),
+                    ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: GaugeWidget(
-                        title: 'Frequency',
-                        value: stats?.frequency ?? 88.5,
-                        min: 80,
-                        max: 100,
-                        unit: 'MHz',
-                        showPointer: true,
+                        title: 'Power Ref',
+                        value: stats?.powerRef ?? 0,
+                        min: 0,
+                        max: 200,
+                        unit: 'W',
+                        warningThreshold: 100,
+                        criticalThreshold: 150,
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 16),
 
-                // Additional metrics
-                if (stats?.additionalMetrics != null) ...[
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Additional Metrics', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 12),
-                          ...stats!.additionalMetrics!.entries.map((entry) {
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4.0),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(entry.key, style: const TextStyle(fontSize: 14)),
-                                  Text(
-                                    entry.value.toString(),
-                                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }).toList(),
-                        ],
+                // Gauges - Row 3
+                Row(
+                  children: [
+                    Expanded(
+                      child: GaugeWidget(
+                        title: 'Heat Temp',
+                        value: stats?.heatTemp ?? 0,
+                        min: 0,
+                        max: 120,
+                        unit: '°C',
+                        warningThreshold: 75,
+                        criticalThreshold: 90,
                       ),
                     ),
-                  ),
-                ],
-                const SizedBox(height: 8),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: GaugeWidget(
+                        title: 'Fan Speed',
+                        value: stats?.fanSpeed ?? 0,
+                        min: 0,
+                        max: 5000,
+                        unit: 'RPM',
+                        warningThreshold: 4000,
+                        criticalThreshold: 4500,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
 
                 // Last update timestamp
                 Text(
