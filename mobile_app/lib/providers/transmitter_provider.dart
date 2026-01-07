@@ -1,24 +1,34 @@
 import 'package:flutter/foundation.dart';
 import 'package:kryz_shared/kryz_shared.dart';
+import 'dart:async';
 
 class TransmitterProvider extends ChangeNotifier {
   TransmitterStats? _currentStats;
   List<TransmitterStats> _history = [];
   Map<String, dynamic>? _latestAlert;
+  Timer? _dataTimeoutTimer;
+  bool _isDataStale = false;
 
   static const int maxHistoryLength = 100;
+  static const Duration dataTimeout = Duration(minutes: 1);
 
   TransmitterStats? get currentStats => _currentStats;
   List<TransmitterStats> get history => _history;
   Map<String, dynamic>? get latestAlert => _latestAlert;
+  bool get isDataStale => _isDataStale;
 
-  bool get hasData => _currentStats != null;
+  bool get hasData => _currentStats != null && !_isDataStale;
   bool get isHealthy => _currentStats?.isHealthy ?? false;
   String? get alertLevel => _currentStats?.alertLevel;
 
   /// Update with new stats from notification
   void updateStats(TransmitterStats stats) {
     _currentStats = stats;
+    _isDataStale = false;
+
+    // Reset the timeout timer
+    _dataTimeoutTimer?.cancel();
+    _dataTimeoutTimer = Timer(dataTimeout, _onDataTimeout);
 
     // Add to history
     _history.insert(0, stats);
@@ -29,6 +39,36 @@ class TransmitterProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  /// Called when no data received for timeout period
+  void _onDataTimeout() {
+    _isDataStale = true;
+    _currentStats = null;
+    
+    // Raise an alert
+    updateAlert({
+      'level': 'critical',
+      'message': 'No data received from transmitter for 1 minute. Connection may be lost.',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    
+    notifyListeners();
+  }
+
+  /// Reset data (e.g., when connection lost)
+  void resetData() {
+    _dataTimeoutTimer?.cancel();
+    _dataTimeoutTimer = null;
+    _currentStats = null;
+    _isDataStale = true;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _dataTimeoutTimer?.cancel();
+    super.dispose();
   }
 
   /// Update alert notification

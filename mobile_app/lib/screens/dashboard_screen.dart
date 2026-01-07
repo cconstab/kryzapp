@@ -123,6 +123,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 // Status card or waiting message
                 if (hasData && stats != null)
                   StatusCard(stats: stats)
+                else if (provider.isDataStale)
+                  Card(
+                    elevation: 4,
+                    color: Colors.red.shade700,
+                    child: const Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.warning, color: Colors.white, size: 24),
+                              SizedBox(width: 12),
+                              Flexible(
+                                child: Text(
+                                  'DATA TIMEOUT - No data received',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'Connection lost - Check SNMP collector and transmitter',
+                            style: TextStyle(fontSize: 14, color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
                 else
                   Card(
                     elevation: 4,
