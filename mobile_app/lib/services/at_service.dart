@@ -16,6 +16,7 @@ class AtService extends ChangeNotifier {
   bool _isDisposed = false;
   bool _isProcessingNotification = false;
   StreamSubscription? _notificationSubscription;
+  DateTime? _subscriptionStartTime; // Track when we started subscribing
 
   // Callback for received stats
   Function(TransmitterStats)? onStatsReceived;
@@ -42,7 +43,7 @@ class AtService extends ChangeNotifier {
               ..commitLogPath = 'storage/commitLog'
               ..isLocalStoreRequired = true // Required for keys and auth
               ..fetchOfflineNotifications = false // Only process new notifications, not history
-              ..syncIntervalMins = 10 // Reduce sync frequency to minimize background activity
+              ..syncIntervalMins = -1 // Disable automatic sync to prevent database interference
               ..maxDataSize = 512000, // Limit data size
             rootEnvironment: RootEnvironment.Production,
             domain: 'root.atsign.org',
@@ -108,6 +109,10 @@ class AtService extends ChangeNotifier {
 
     logger.info('Subscribing to notifications (current data only)');
 
+    // Mark the time we start subscribing - only accept notifications after this point
+    _subscriptionStartTime = DateTime.now();
+    logger.info('Will only accept notifications newer than: $_subscriptionStartTime');
+
     try {
       // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
       _notificationSubscription = _atClient!.notificationService
@@ -170,9 +175,18 @@ class AtService extends ChangeNotifier {
       return;
     }
 
+    // Filter out old notifications - only accept notifications created after subscription started
+    if (_subscriptionStartTime != null) {
+      final notificationTime = DateTime.fromMillisecondsSinceEpoch(notification.epochMillis);
+      if (notificationTime.isBefore(_subscriptionStartTime!)) {
+        logger.info('Ignoring old notification from $notificationTime (before subscription at $_subscriptionStartTime)');
+        return;
+      }
+    }
+
     if (_isProcessingNotification) {
-      logger.fine('Already processing a notification, queuing this one');
-      // Could implement a queue here if needed, but for now just skip
+      logger.fine('Already processing a notification, skipping this one');
+      // Skip concurrent notifications to avoid database contention
       return;
     }
 
@@ -188,6 +202,13 @@ class AtService extends ChangeNotifier {
 
       if (value == null || value.isEmpty) {
         logger.warning('Notification value is null or empty');
+        return;
+      }
+
+      // Check if this looks like encrypted data that failed to decrypt
+      if (value.length > 100 && !value.startsWith('{')) {
+        logger.warning('Received encrypted notification - decryption may have failed due to database issue');
+        logger.warning('This can happen after timeout when database is temporarily unavailable');
         return;
       }
 
@@ -210,6 +231,8 @@ class AtService extends ChangeNotifier {
     } catch (e, stackTrace) {
       if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
         logger.warning('File system error handling notification (database may be closing): $e');
+      } else if (e is FormatException) {
+        logger.warning('Failed to parse notification JSON - may be encrypted data: $e');
       } else {
         logger.severe('Failed to handle notification: $e', e, stackTrace);
       }

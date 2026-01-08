@@ -78,7 +78,7 @@ class AtNotificationService {
       ..metadata = (Metadata()
         ..isPublic = false
         ..isEncrypted = true // Tell atPlatform to encrypt the data
-        ..ttl = 86400000); // 24 hours
+        ..ttl = 60000); // 1 minute - we only care about real-time data
 
     final notificationParams = NotificationParams.forUpdate(
       atKey,
