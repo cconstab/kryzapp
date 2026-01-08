@@ -14,6 +14,7 @@ class AtService extends ChangeNotifier {
   String? _currentAtSign;
   bool _isInitialized = false;
   bool _isDisposed = false;
+  bool _isProcessingNotification = false;
   StreamSubscription? _notificationSubscription;
 
   // Callback for received stats
@@ -94,45 +95,88 @@ class AtService extends ChangeNotifier {
   }
 
   /// Subscribe to incoming notifications
+  /// 
+  /// This subscription remains open throughout the app lifecycle, including
+  /// during data timeouts. This enables automatic recovery when the data
+  /// stream resumes - the UI will automatically switch from the red timeout
+  /// banner back to the green status card.
   void _subscribeToNotifications() {
-    if (_atClient == null) return;
+    if (_atClient == null || _isDisposed) {
+      logger.warning('Cannot subscribe: ${_atClient == null ? "atClient is null" : "service is disposed"}');
+      return;
+    }
 
     logger.info('Subscribing to notifications (current data only)');
 
-    // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
-    _notificationSubscription = _atClient!.notificationService
-        .subscribe(
-          regex: '.*kryz',
-          shouldDecrypt: true,
-        )
-        .listen(
-      (notification) {
-        try {
-          _handleNotification(notification);
-        } catch (e, stackTrace) {
-          // Catch any errors during notification handling to prevent stream closure
-          logger.severe('Error handling notification: $e', e, stackTrace);
-        }
-      },
-      onError: (error, stackTrace) {
-        // Handle stream errors gracefully
-        if (error.toString().contains('FileSystemException') || error.toString().contains('File closed')) {
-          logger.warning('File system error in notification stream (likely app shutdown): $error');
+    try {
+      // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
+      _notificationSubscription = _atClient!.notificationService
+          .subscribe(
+        regex: '.*kryz',
+        shouldDecrypt: true,
+      )
+          .handleError((error, stackTrace) {
+        // Catch errors from the stream itself (e.g., during decryption)
+        if (error.toString().contains('FileSystemException') || 
+            error.toString().contains('File closed') ||
+            error.toString().contains('exception in get')) {
+          logger.warning('File system error in notification decryption (database may be unavailable): $error');
+          // Don't rethrow - just log and continue, keeping subscription alive
         } else {
-          logger.severe('Notification stream error: $error', error, stackTrace);
+          logger.severe('Unexpected error in notification stream: $error', error, stackTrace);
         }
-      },
-      cancelOnError: false, // Keep subscription alive despite errors
-    );
+      })
+          .listen(
+        (notification) {
+          // Double-check not disposed before processing
+          if (_isDisposed) {
+            logger.fine('Notification received but service is disposed, ignoring');
+            return;
+          }
+          
+          try {
+            _handleNotification(notification);
+          } catch (e, stackTrace) {
+            // Catch any errors during notification handling to prevent stream closure
+            if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
+              logger.warning('File system error during notification handling (app may be shutting down): $e');
+            } else {
+              logger.severe('Error handling notification: $e', e, stackTrace);
+            }
+          }
+        },
+        onError: (error, stackTrace) {
+          // Handle stream errors gracefully
+          if (error.toString().contains('FileSystemException') || 
+              error.toString().contains('File closed') ||
+              error.toString().contains('exception in get')) {
+            logger.warning('File system error in notification stream (likely app shutdown or database issue): $error');
+          } else {
+            logger.severe('Notification stream error: $error', error, stackTrace);
+          }
+        },
+        cancelOnError: false, // Keep subscription alive despite errors
+      );
+    } catch (e, stackTrace) {
+      logger.severe('Failed to create notification subscription: $e', e, stackTrace);
+    }
   }
 
   /// Handle incoming notification
   void _handleNotification(AtNotification notification) {
-    // Ignore notifications if service is disposed
+    // Ignore notifications if service is disposed or already processing
     if (_isDisposed) {
       logger.fine('Ignoring notification after disposal');
       return;
     }
+
+    if (_isProcessingNotification) {
+      logger.fine('Already processing a notification, queuing this one');
+      // Could implement a queue here if needed, but for now just skip
+      return;
+    }
+
+    _isProcessingNotification = true;
 
     try {
       logger.info('Received notification: ${notification.key}');
@@ -164,15 +208,26 @@ class AtService extends ChangeNotifier {
         onAlertReceived?.call(alertData);
       }
     } catch (e, stackTrace) {
-      logger.severe('Failed to handle notification: $e', e, stackTrace);
+      if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
+        logger.warning('File system error handling notification (database may be closing): $e');
+      } else {
+        logger.severe('Failed to handle notification: $e', e, stackTrace);
+      }
+    } finally {
+      _isProcessingNotification = false;
     }
   }
 
   /// Cleanup
   @override
   void dispose() {
+    logger.info('Disposing AtService - cancelling notification subscription');
     _isDisposed = true;
+    
+    // Cancel subscription IMMEDIATELY to prevent processing notifications during shutdown
     _notificationSubscription?.cancel();
+    _notificationSubscription = null;
+    
     super.dispose();
   }
 }

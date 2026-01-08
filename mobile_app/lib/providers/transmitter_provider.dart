@@ -22,9 +22,12 @@ class TransmitterProvider extends ChangeNotifier {
   String? get alertLevel => _currentStats?.alertLevel;
 
   /// Update with new stats from notification
+  /// 
+  /// This automatically clears the stale flag and resets the timeout timer,
+  /// enabling automatic recovery when data resumes after a timeout.
   void updateStats(TransmitterStats stats) {
     _currentStats = stats;
-    _isDataStale = false;
+    _isDataStale = false; // Clear timeout flag - enables automatic recovery
 
     // Reset the timeout timer
     _dataTimeoutTimer?.cancel();
