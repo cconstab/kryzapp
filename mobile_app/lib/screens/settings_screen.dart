@@ -316,7 +316,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       final gauges = Map<String, GaugeConfig>.from(_config.gauges);
       gauges[metricName] = newConfig;
-      _config = DashboardConfig(gauges: gauges);
+      _config = DashboardConfig(gauges: gauges, stationName: _config.stationName);
       _hasChanges = true;
     });
   }

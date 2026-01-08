@@ -27,23 +27,35 @@ class StatusCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Text(
                   stationName ?? stats.transmitterId,
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                  style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
               stats.status,
-              style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w500),
+              style: const TextStyle(
+                  fontSize: 18,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500),
             ),
             if (stats.alertLevel != null) ...[
               const SizedBox(height: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12)),
                 child: Text(
                   '${stats.alertLevel!.toUpperCase()} ALERT',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _getStatusColor()),
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: _getStatusColor()),
                 ),
               ),
             ],

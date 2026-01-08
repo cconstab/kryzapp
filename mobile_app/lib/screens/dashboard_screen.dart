@@ -63,10 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (atService.atClient != null) {
       configService.setAtClient(atService.atClient);
-      await configService.loadConfig(); // Load from atProtocol
-      if (mounted) {
-        setState(() {}); // Refresh UI with synced config
-      }
+      await configService.loadConfig(); // Load from atProtocol - will notify listeners
     }
   }
 

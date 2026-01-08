@@ -1,11 +1,12 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:kryz_shared/kryz_shared.dart';
 import 'package:logging/logging.dart';
 import 'package:at_client_mobile/at_client_mobile.dart';
 
 final logger = Logger('ConfigService');
 
-class ConfigService {
+class ConfigService extends ChangeNotifier {
   static const String _atKeyName = 'kryz_dashboard_config';
 
   DashboardConfig? _currentConfig;
@@ -26,7 +27,7 @@ class ConfigService {
         final atConfig = await _loadFromAtProtocol();
         if (atConfig != null) {
           _currentConfig = atConfig;
-          logger.info('Configuration loaded from atProtocol');
+          notifyListeners();
           return;
         }
       }
@@ -39,9 +40,11 @@ class ConfigService {
       if (_atClient != null) {
         await _saveToAtProtocol(_currentConfig!);
       }
+      notifyListeners();
     } catch (e) {
       logger.severe('Failed to load configuration: $e');
       _currentConfig = DashboardConfig.defaults();
+      notifyListeners();
     }
   }
 
@@ -57,6 +60,7 @@ class ConfigService {
       } else {
         logger.info('Configuration cached (will sync when connected)');
       }
+      notifyListeners();
     } catch (e) {
       logger.severe('Failed to save configuration: $e');
       rethrow;
@@ -124,7 +128,10 @@ class ConfigService {
   Future<void> updateGaugeConfig(String metricName, GaugeConfig newConfig) async {
     final gauges = Map<String, GaugeConfig>.from(config.gauges);
     gauges[metricName] = newConfig;
-    final newDashboardConfig = DashboardConfig(gauges: gauges);
+    final newDashboardConfig = DashboardConfig(
+      gauges: gauges,
+      stationName: config.stationName,
+    );
     await saveConfig(newDashboardConfig);
   }
 

@@ -34,7 +34,7 @@ class KryzApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AtService()),
         ChangeNotifierProvider(create: (_) => TransmitterProvider()),
-        Provider<ConfigService>.value(value: configService),
+        ChangeNotifierProvider<ConfigService>.value(value: configService),
       ],
       child: MaterialApp(
         title: 'KRYZ Transmitter Monitor',
