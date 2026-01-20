@@ -136,18 +136,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final now = DateTime.now();
     final timeFormat = DateFormat('HH:mm:ss');
     final dateFormat = DateFormat('MMM dd, yyyy');
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 600;
 
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('KRYZ Transmitter Monitor',
-                style: TextStyle(fontSize: 18)),
+            Text('KRYZ Transmitter Monitor',
+                style: TextStyle(fontSize: isSmallScreen ? 16 : 18)),
             Text(
               '${dateFormat.format(now)} • ${timeFormat.format(now)}',
               style:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+                  TextStyle(fontSize: isSmallScreen ? 10 : 12, fontWeight: FontWeight.normal),
             ),
           ],
         ),
@@ -171,10 +173,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Consumer<AtService>(
             builder: (context, atService, child) {
               return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 8.0 : 16.0),
                 child: Center(
                     child: Text(atService.currentAtSign ?? '',
-                        style: const TextStyle(fontSize: 14))),
+                        style: TextStyle(fontSize: isSmallScreen ? 12 : 14))),
               );
             },
           ),
@@ -285,16 +287,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     // Determine number of columns based on screen width
                     int crossAxisCount;
                     double childAspectRatio;
+                    double spacing;
 
                     if (constraints.maxWidth > 900) {
-                      crossAxisCount =
-                          3; // 3 columns for medium and wide screens
-                      childAspectRatio =
-                          1.3; // Wider/shorter to fit everything on screen
+                      crossAxisCount = 3; // 3 columns for wide screens
+                      childAspectRatio = 1.3;
+                      spacing = 16;
+                    } else if (constraints.maxWidth > 600) {
+                      crossAxisCount = 2; // 2 columns for medium screens
+                      childAspectRatio = 1.1;
+                      spacing = 16;
                     } else {
-                      crossAxisCount = 2; // 2 columns for narrow screens
-                      childAspectRatio =
-                          0.95; // Slightly taller to prevent overflow
+                      crossAxisCount = 2; // 2 columns for small screens
+                      childAspectRatio = 1.0; // More square to fit gauges better
+                      spacing = 8; // Reduced spacing
                     }
 
                     final gaugeWidgets = [
@@ -396,8 +402,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       physics: const NeverScrollableScrollPhysics(),
                       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: crossAxisCount,
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
+                        crossAxisSpacing: spacing,
+                        mainAxisSpacing: spacing,
                         childAspectRatio: childAspectRatio,
                       ),
                       itemCount: gaugeWidgets.length,

@@ -91,8 +91,35 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
     return Colors.green;
   }
 
+  double? _calculateInterval() {
+    // Calculate appropriate interval to prevent label overlap
+    final range = widget.max - widget.min;
+    
+    // For large ranges (like Fan Speed 0-8000), use larger intervals
+    if (range > 5000) {
+      return 2000; // Show labels at 0, 2000, 4000, 6000, 8000
+    } else if (range > 1000) {
+      return 500; // Show labels at reasonable intervals
+    } else if (range > 100) {
+      return 50;
+    } else if (range > 50) {
+      return 25;
+    } else if (range > 10) {
+      return 10;
+    }
+    // Let the gauge auto-calculate for small ranges
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 600;
+    final titleFontSize = isSmallScreen ? 13.0 : 16.0;
+    final valueFontSize = isSmallScreen ? 16.0 : 20.0;
+    final unitFontSize = isSmallScreen ? 10.0 : 12.0;
+    final padding = isSmallScreen ? 8.0 : 16.0;
+    
     return AnimatedBuilder(
       animation: _animation,
       builder: (context, child) {
@@ -100,12 +127,15 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
         return Card(
           elevation: 4,
           child: Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: EdgeInsets.all(padding),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
+                Text(widget.title, 
+                  style: TextStyle(fontSize: titleFontSize, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                SizedBox(height: isSmallScreen ? 4 : 8),
                 Flexible(
                   child: AspectRatio(
                     aspectRatio: 1.0,
@@ -116,6 +146,11 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
                           maximum: widget.max,
                           showLabels: true,
                           showTicks: true,
+                          labelOffset: isSmallScreen ? 5 : 10,
+                          axisLabelStyle: GaugeTextStyle(
+                            fontSize: isSmallScreen ? 8 : 10,
+                          ),
+                          interval: _calculateInterval(),
                           ranges: _buildRanges(),
                           pointers: <GaugePointer>[
                             NeedlePointer(
@@ -132,12 +167,12 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
                                   Text(
                                     animatedValue.toStringAsFixed(1),
                                     style: TextStyle(
-                                      fontSize: 20,
+                                      fontSize: valueFontSize,
                                       fontWeight: FontWeight.bold,
                                       color: _getValueColor(animatedValue),
                                     ),
                                   ),
-                                  Text(widget.unit, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                                  Text(widget.unit, style: TextStyle(fontSize: unitFontSize, color: Colors.grey)),
                                 ],
                               ),
                               angle: 90,

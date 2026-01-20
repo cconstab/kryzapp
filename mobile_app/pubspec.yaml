@@ -33,11 +33,12 @@ dependencies:
 dependency_overrides:
   # Fix Android build compatibility issues
   biometric_storage: ^5.0.1
-  # Use forked flutter_keychain with V2 embedding support
-  flutter_keychain:
-    git:
-      url: https://github.com/Al-Qaseh/flutter_keychain.git
-      ref: hot-fix/v1-embedding-deprecation
+  # Note: Removed forked flutter_keychain to fix macOS keychain persistence
+  # The fork was only needed for Android V2 embedding, but broke keychain storage
+  # flutter_keychain:
+  #   git:
+  #     url: https://github.com/Al-Qaseh/flutter_keychain.git
+  #     ref: hot-fix/v1-embedding-deprecation
 
 dev_dependencies:
   flutter_test:
