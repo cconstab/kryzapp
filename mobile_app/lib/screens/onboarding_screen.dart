@@ -568,7 +568,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         rootDomain: authRequest.rootDomain,
       );
 
-      // Perform CRAM onboarding  
+      // Perform CRAM onboarding
       // Note: CramDialog automatically saves keys to keychain via its internal storage
       final response = await CramDialog.show(
         context,

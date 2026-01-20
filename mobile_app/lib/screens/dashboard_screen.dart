@@ -148,8 +148,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: TextStyle(fontSize: isSmallScreen ? 16 : 18)),
             Text(
               '${dateFormat.format(now)} • ${timeFormat.format(now)}',
-              style:
-                  TextStyle(fontSize: isSmallScreen ? 10 : 12, fontWeight: FontWeight.normal),
+              style: TextStyle(
+                  fontSize: isSmallScreen ? 10 : 12,
+                  fontWeight: FontWeight.normal),
             ),
           ],
         ),
@@ -173,7 +174,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Consumer<AtService>(
             builder: (context, atService, child) {
               return Padding(
-                padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 8.0 : 16.0),
+                padding: EdgeInsets.symmetric(
+                    horizontal: isSmallScreen ? 8.0 : 16.0),
                 child: Center(
                     child: Text(atService.currentAtSign ?? '',
                         style: TextStyle(fontSize: isSmallScreen ? 12 : 14))),
@@ -299,7 +301,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       spacing = 16;
                     } else {
                       crossAxisCount = 2; // 2 columns for small screens
-                      childAspectRatio = 1.0; // More square to fit gauges better
+                      childAspectRatio =
+                          1.0; // More square to fit gauges better
                       spacing = 8; // Reduced spacing
                     }
 

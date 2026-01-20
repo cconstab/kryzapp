@@ -31,7 +31,8 @@ class GaugeWidget extends StatefulWidget {
   State<GaugeWidget> createState() => _GaugeWidgetState();
 }
 
-class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStateMixin {
+class _GaugeWidgetState extends State<GaugeWidget>
+    with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _animation;
   double _currentValue = 0.0;
@@ -44,7 +45,8 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
-    _animation = Tween<double>(begin: _currentValue, end: _currentValue).animate(
+    _animation =
+        Tween<double>(begin: _currentValue, end: _currentValue).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
   }
@@ -73,18 +75,22 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
 
   Color _getValueColor(double value) {
     // Check critical thresholds first
-    if (widget.criticalHighThreshold != null && value >= widget.criticalHighThreshold!) {
+    if (widget.criticalHighThreshold != null &&
+        value >= widget.criticalHighThreshold!) {
       return Colors.red;
     }
-    if (widget.criticalLowThreshold != null && value <= widget.criticalLowThreshold!) {
+    if (widget.criticalLowThreshold != null &&
+        value <= widget.criticalLowThreshold!) {
       return Colors.red;
     }
 
     // Check warning thresholds
-    if (widget.warningHighThreshold != null && value >= widget.warningHighThreshold!) {
+    if (widget.warningHighThreshold != null &&
+        value >= widget.warningHighThreshold!) {
       return Colors.orange;
     }
-    if (widget.warningLowThreshold != null && value <= widget.warningLowThreshold!) {
+    if (widget.warningLowThreshold != null &&
+        value <= widget.warningLowThreshold!) {
       return Colors.orange;
     }
 
@@ -94,7 +100,7 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
   double? _calculateInterval() {
     // Calculate appropriate interval to prevent label overlap
     final range = widget.max - widget.min;
-    
+
     // For large ranges (like Fan Speed 0-8000), use larger intervals
     if (range > 5000) {
       return 2000; // Show labels at 0, 2000, 4000, 6000, 8000
@@ -119,7 +125,7 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
     final valueFontSize = isSmallScreen ? 16.0 : 20.0;
     final unitFontSize = isSmallScreen ? 10.0 : 12.0;
     final padding = isSmallScreen ? 8.0 : 16.0;
-    
+
     return AnimatedBuilder(
       animation: _animation,
       builder: (context, child) {
@@ -131,11 +137,6 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(widget.title, 
-                  style: TextStyle(fontSize: titleFontSize, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                SizedBox(height: isSmallScreen ? 4 : 8),
                 Flexible(
                   child: AspectRatio(
                     aspectRatio: 1.0,
@@ -155,7 +156,8 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
                           pointers: <GaugePointer>[
                             NeedlePointer(
                               value: animatedValue,
-                              enableAnimation: false, // We handle animation ourselves
+                              enableAnimation:
+                                  false, // We handle animation ourselves
                               needleColor: _getValueColor(animatedValue),
                             ),
                           ],
@@ -172,7 +174,10 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
                                       color: _getValueColor(animatedValue),
                                     ),
                                   ),
-                                  Text(widget.unit, style: TextStyle(fontSize: unitFontSize, color: Colors.grey)),
+                                  Text(widget.unit,
+                                      style: TextStyle(
+                                          fontSize: unitFontSize,
+                                          color: Colors.grey)),
                                 ],
                               ),
                               angle: 90,
@@ -183,6 +188,13 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
                       ],
                     ),
                   ),
+                ),
+                SizedBox(height: isSmallScreen ? 4 : 8),
+                Text(
+                  widget.title,
+                  style: TextStyle(
+                      fontSize: titleFontSize, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
@@ -200,7 +212,10 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
         widget.criticalHighThreshold == null &&
         widget.warningLowThreshold == null &&
         widget.criticalLowThreshold == null) {
-      ranges.add(GaugeRange(startValue: widget.min, endValue: widget.max, color: Colors.green.withOpacity(0.3)));
+      ranges.add(GaugeRange(
+          startValue: widget.min,
+          endValue: widget.max,
+          color: Colors.green.withOpacity(0.3)));
       return ranges;
     }
 
@@ -208,29 +223,43 @@ class _GaugeWidgetState extends State<GaugeWidget> with SingleTickerProviderStat
     // For metrics with both low and high thresholds (e.g., modulation)
     if (widget.criticalLowThreshold != null) {
       ranges.add(GaugeRange(
-          startValue: widget.min, endValue: widget.criticalLowThreshold!, color: Colors.red.withOpacity(0.3)));
+          startValue: widget.min,
+          endValue: widget.criticalLowThreshold!,
+          color: Colors.red.withOpacity(0.3)));
     }
 
     if (widget.warningLowThreshold != null) {
       final start = widget.criticalLowThreshold ?? widget.min;
-      ranges.add(
-          GaugeRange(startValue: start, endValue: widget.warningLowThreshold!, color: Colors.orange.withOpacity(0.3)));
+      ranges.add(GaugeRange(
+          startValue: start,
+          endValue: widget.warningLowThreshold!,
+          color: Colors.orange.withOpacity(0.3)));
     }
 
     // Green range in the middle
-    final greenStart = widget.warningLowThreshold ?? widget.criticalLowThreshold ?? widget.min;
-    final greenEnd = widget.warningHighThreshold ?? widget.criticalHighThreshold ?? widget.max;
-    ranges.add(GaugeRange(startValue: greenStart, endValue: greenEnd, color: Colors.green.withOpacity(0.3)));
+    final greenStart =
+        widget.warningLowThreshold ?? widget.criticalLowThreshold ?? widget.min;
+    final greenEnd = widget.warningHighThreshold ??
+        widget.criticalHighThreshold ??
+        widget.max;
+    ranges.add(GaugeRange(
+        startValue: greenStart,
+        endValue: greenEnd,
+        color: Colors.green.withOpacity(0.3)));
 
     if (widget.warningHighThreshold != null) {
       final end = widget.criticalHighThreshold ?? widget.max;
-      ranges.add(
-          GaugeRange(startValue: widget.warningHighThreshold!, endValue: end, color: Colors.orange.withOpacity(0.3)));
+      ranges.add(GaugeRange(
+          startValue: widget.warningHighThreshold!,
+          endValue: end,
+          color: Colors.orange.withOpacity(0.3)));
     }
 
     if (widget.criticalHighThreshold != null) {
       ranges.add(GaugeRange(
-          startValue: widget.criticalHighThreshold!, endValue: widget.max, color: Colors.red.withOpacity(0.3)));
+          startValue: widget.criticalHighThreshold!,
+          endValue: widget.max,
+          color: Colors.red.withOpacity(0.3)));
     }
 
     return ranges;
