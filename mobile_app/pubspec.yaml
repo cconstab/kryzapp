@@ -11,14 +11,13 @@ dependencies:
     sdk: flutter
   
   # atPlatform SDK
-  at_client_mobile: ^3.2.0
-  at_onboarding_flutter: ^6.2.0
+  at_client_flutter: ^0.1.0
   at_utils: ^3.0.0
   
   # UI components
   cupertino_icons: ^1.0.6
-  syncfusion_flutter_gauges: ^24.2.9
-  intl: ^0.19.0
+  syncfusion_flutter_gauges: ^32.1.23
+  intl: ^0.20.2
   
   # State management
   provider: ^6.1.1
@@ -30,6 +29,15 @@ dependencies:
   # Shared models
   kryz_shared:
     path: ../shared
+
+dependency_overrides:
+  # Fix Android build compatibility issues
+  biometric_storage: ^5.0.1
+  # Use forked flutter_keychain with V2 embedding support
+  flutter_keychain:
+    git:
+      url: https://github.com/Al-Qaseh/flutter_keychain.git
+      ref: hot-fix/v1-embedding-deprecation
 
 dev_dependencies:
   flutter_test:

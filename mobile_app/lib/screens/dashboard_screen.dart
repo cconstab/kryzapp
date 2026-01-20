@@ -44,7 +44,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _setupNotificationListeners() {
     final atService = Provider.of<AtService>(context, listen: false);
-    final transmitterProvider = Provider.of<TransmitterProvider>(context, listen: false);
+    final transmitterProvider =
+        Provider.of<TransmitterProvider>(context, listen: false);
 
     atService.onStatsReceived = (stats) {
       transmitterProvider.updateStats(stats);
@@ -63,7 +64,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (atService.atClient != null) {
       configService.setAtClient(atService.atClient);
-      await configService.loadConfig(); // Load from atProtocol - will notify listeners
+      await configService
+          .loadConfig(); // Load from atProtocol - will notify listeners
+    }
+  }
+
+  void _handleLogout(BuildContext context) async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      // Reset the AtService
+      final atService = Provider.of<AtService>(context, listen: false);
+      atService.reset();
+
+      // Clear transmitter data
+      final transmitterProvider =
+          Provider.of<TransmitterProvider>(context, listen: false);
+      transmitterProvider.clearAlert();
     }
   }
 
@@ -73,7 +107,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(Icons.warning, color: alert['level'] == 'critical' ? Colors.red : Colors.orange),
+            Icon(Icons.warning,
+                color:
+                    alert['level'] == 'critical' ? Colors.red : Colors.orange),
             const SizedBox(width: 8),
             Text(alert['level']?.toUpperCase() ?? 'ALERT'),
           ],
@@ -83,7 +119,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
-              Provider.of<TransmitterProvider>(context, listen: false).clearAlert();
+              Provider.of<TransmitterProvider>(context, listen: false)
+                  .clearAlert();
             },
             child: const Text('OK'),
           ),
@@ -105,10 +142,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('KRYZ Transmitter Monitor', style: TextStyle(fontSize: 18)),
+            const Text('KRYZ Transmitter Monitor',
+                style: TextStyle(fontSize: 18)),
             Text(
               '${dateFormat.format(now)} • ${timeFormat.format(now)}',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+              style:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
             ),
           ],
         ),
@@ -119,7 +158,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onPressed: () async {
               await Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => SettingsScreen(configService: configService),
+                  builder: (context) =>
+                      SettingsScreen(configService: configService),
                 ),
               );
               // Refresh the screen when returning from settings
@@ -132,9 +172,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             builder: (context, atService, child) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Center(child: Text(atService.currentAtSign ?? '', style: const TextStyle(fontSize: 14))),
+                child: Center(
+                    child: Text(atService.currentAtSign ?? '',
+                        style: const TextStyle(fontSize: 14))),
               );
             },
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            onPressed: () => _handleLogout(context),
           ),
         ],
       ),
@@ -162,7 +209,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.warning, color: Colors.white, size: 24),
+                              Icon(Icons.warning,
+                                  color: Colors.white, size: 24),
                               SizedBox(width: 12),
                               Flexible(
                                 child: Text(
@@ -179,7 +227,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           SizedBox(height: 8),
                           Text(
                             'Connection lost - Check SNMP collector and transmitter',
-                            style: TextStyle(fontSize: 14, color: Colors.white70),
+                            style:
+                                TextStyle(fontSize: 14, color: Colors.white70),
                           ),
                         ],
                       ),
@@ -201,7 +250,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white),
                                 ),
                               ),
                               SizedBox(width: 12),
@@ -220,7 +270,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           SizedBox(height: 8),
                           Text(
                             'Make sure the SNMP collector is running',
-                            style: TextStyle(fontSize: 14, color: Colors.white70),
+                            style:
+                                TextStyle(fontSize: 14, color: Colors.white70),
                           ),
                         ],
                       ),
@@ -236,11 +287,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     double childAspectRatio;
 
                     if (constraints.maxWidth > 900) {
-                      crossAxisCount = 3; // 3 columns for medium and wide screens
-                      childAspectRatio = 1.3; // Wider/shorter to fit everything on screen
+                      crossAxisCount =
+                          3; // 3 columns for medium and wide screens
+                      childAspectRatio =
+                          1.3; // Wider/shorter to fit everything on screen
                     } else {
                       crossAxisCount = 2; // 2 columns for narrow screens
-                      childAspectRatio = 0.95; // Slightly taller to prevent overflow
+                      childAspectRatio =
+                          0.95; // Slightly taller to prevent overflow
                     }
 
                     final gaugeWidgets = [
@@ -250,10 +304,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('modulation').minValue,
                         max: config.getConfig('modulation').maxValue,
                         unit: config.getConfig('modulation').unit,
-                        warningLowThreshold: config.getConfig('modulation').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('modulation').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('modulation').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('modulation').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('modulation').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('modulation').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('modulation').warningHighThreshold,
+                        criticalHighThreshold: config
+                            .getConfig('modulation')
+                            .criticalHighThreshold,
                       ),
                       GaugeWidget(
                         title: 'SWR',
@@ -261,10 +320,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('swr').minValue,
                         max: config.getConfig('swr').maxValue,
                         unit: config.getConfig('swr').unit,
-                        warningLowThreshold: config.getConfig('swr').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('swr').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('swr').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('swr').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('swr').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('swr').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('swr').warningHighThreshold,
+                        criticalHighThreshold:
+                            config.getConfig('swr').criticalHighThreshold,
                       ),
                       GaugeWidget(
                         title: 'Power Out',
@@ -272,10 +335,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('powerOut').minValue,
                         max: config.getConfig('powerOut').maxValue,
                         unit: config.getConfig('powerOut').unit,
-                        warningLowThreshold: config.getConfig('powerOut').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('powerOut').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('powerOut').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('powerOut').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('powerOut').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('powerOut').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('powerOut').warningHighThreshold,
+                        criticalHighThreshold:
+                            config.getConfig('powerOut').criticalHighThreshold,
                       ),
                       GaugeWidget(
                         title: 'Power Ref',
@@ -283,10 +350,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('powerRef').minValue,
                         max: config.getConfig('powerRef').maxValue,
                         unit: config.getConfig('powerRef').unit,
-                        warningLowThreshold: config.getConfig('powerRef').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('powerRef').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('powerRef').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('powerRef').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('powerRef').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('powerRef').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('powerRef').warningHighThreshold,
+                        criticalHighThreshold:
+                            config.getConfig('powerRef').criticalHighThreshold,
                       ),
                       GaugeWidget(
                         title: 'Heat Temp',
@@ -294,10 +365,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('heatTemp').minValue,
                         max: config.getConfig('heatTemp').maxValue,
                         unit: config.getConfig('heatTemp').unit,
-                        warningLowThreshold: config.getConfig('heatTemp').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('heatTemp').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('heatTemp').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('heatTemp').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('heatTemp').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('heatTemp').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('heatTemp').warningHighThreshold,
+                        criticalHighThreshold:
+                            config.getConfig('heatTemp').criticalHighThreshold,
                       ),
                       GaugeWidget(
                         title: 'Fan Speed',
@@ -305,10 +380,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         min: config.getConfig('fanSpeed').minValue,
                         max: config.getConfig('fanSpeed').maxValue,
                         unit: config.getConfig('fanSpeed').unit,
-                        warningLowThreshold: config.getConfig('fanSpeed').warningLowThreshold,
-                        criticalLowThreshold: config.getConfig('fanSpeed').criticalLowThreshold,
-                        warningHighThreshold: config.getConfig('fanSpeed').warningHighThreshold,
-                        criticalHighThreshold: config.getConfig('fanSpeed').criticalHighThreshold,
+                        warningLowThreshold:
+                            config.getConfig('fanSpeed').warningLowThreshold,
+                        criticalLowThreshold:
+                            config.getConfig('fanSpeed').criticalLowThreshold,
+                        warningHighThreshold:
+                            config.getConfig('fanSpeed').warningHighThreshold,
+                        criticalHighThreshold:
+                            config.getConfig('fanSpeed').criticalHighThreshold,
                       ),
                     ];
 

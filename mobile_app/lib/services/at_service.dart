@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:at_client_mobile/at_client_mobile.dart';
-import 'package:at_onboarding_flutter/at_onboarding_flutter.dart';
+import 'package:at_client_flutter/at_client_flutter.dart';
+import 'package:at_auth/at_auth.dart';
 import 'package:logging/logging.dart';
 import 'package:kryz_shared/kryz_shared.dart';
 
@@ -26,84 +25,73 @@ class AtService extends ChangeNotifier {
   String? get currentAtSign => _currentAtSign;
   AtClient? get atClient => _atClient;
 
-  /// Initialize atClient service
-  Future<void> initialize(BuildContext context) async {
+  /// Initialize the service after successful authentication
+  /// This should be called after PkamDialog.show() succeeds with AtClientPreference
+  Future<void> initializeWithAuthResponse(
+      AtAuthResponse response, AtClientPreference preference) async {
     try {
       logger.info('Initializing atClient service');
 
-      // Trigger onboarding with error handling for sync service issues
-      try {
-        await AtOnboarding.onboard(
-          context: context,
-          config: AtOnboardingConfig(
-            atClientPreference: AtClientPreference()
-              ..rootDomain = 'root.atsign.org'
-              ..namespace = 'kryz'
-              ..hiveStoragePath = 'storage'
-              ..commitLogPath = 'storage/commitLog'
-              ..isLocalStoreRequired = true // Required for keys and auth
-              ..fetchOfflineNotifications = false // Only process new notifications, not history
-              ..syncIntervalMins = -1 // Disable automatic sync to prevent database interference
-              ..maxDataSize = 512000, // Limit data size
-            rootEnvironment: RootEnvironment.Production,
-            domain: 'root.atsign.org',
-          ),
-        );
-      } on FileSystemException catch (e) {
-        logger.warning('FileSystemException during onboarding (safe to ignore): $e');
-        // Continue despite FileSystemException - this often happens during sync
-      }
-
-      // Get the current @sign from AtClientManager
-      _currentAtSign = AtClientManager.getInstance().atClient.getCurrentAtSign();
+      // Get atSign from response
+      _currentAtSign = response.atSign;
 
       if (_currentAtSign == null) {
-        logger.warning('Onboarding cancelled - no @sign selected');
+        logger.warning('No atSign found in auth response');
         return;
       }
 
-      logger.info('Onboarded with @sign: $_currentAtSign');
+      logger.info('Setting current atSign in AtClientManager: $_currentAtSign');
 
-      // Get atClient instance
+      // Set the current atSign in AtClientManager - this initializes the AtClient
+      // Pass AtChops and AtLookUp from the auth response to ensure proper initialization
+      await AtClientManager.getInstance().setCurrentAtSign(
+        _currentAtSign!,
+        'kryz',
+        preference,
+        atChops: response.atChops,
+        atLookUp: response.atLookUp,
+      );
+
+      // Get the initialized atClient instance
       _atClient = AtClientManager.getInstance().atClient;
       _isInitialized = true;
+
+      logger.info('AtClient initialized successfully for $_currentAtSign');
 
       // Start listening for notifications
       _subscribeToNotifications();
 
       notifyListeners();
     } catch (e, stackTrace) {
-      // Log but don't crash on FileSystemException
-      if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
-        logger.warning('FileSystemException during initialization (continuing): $e');
-        // Try to recover the atClient even if sync failed
-        try {
-          _currentAtSign = AtClientManager.getInstance().atClient.getCurrentAtSign();
-          if (_currentAtSign != null) {
-            _atClient = AtClientManager.getInstance().atClient;
-            _isInitialized = true;
-            _subscribeToNotifications();
-            notifyListeners();
-            return;
-          }
-        } catch (_) {
-          // Recovery failed, rethrow original error
-        }
-      }
       logger.severe('Failed to initialize atClient', e, stackTrace);
       rethrow;
     }
   }
 
+  /// Reset/logout - clear the current session
+  void reset() {
+    logger.info('Resetting AtService');
+    _isInitialized = false;
+    _currentAtSign = null;
+    _atClient = null;
+
+    // Cancel notification subscription
+    _notificationSubscription?.cancel();
+    _notificationSubscription = null;
+
+    notifyListeners();
+  }
+
   /// Subscribe to incoming notifications
-  /// 
+  ///
   /// This subscription remains open throughout the app lifecycle, including
   /// during data timeouts. This enables automatic recovery when the data
   /// stream resumes - the UI will automatically switch from the red timeout
   /// banner back to the green status card.
   void _subscribeToNotifications() {
     if (_atClient == null || _isDisposed) {
-      logger.warning('Cannot subscribe: ${_atClient == null ? "atClient is null" : "service is disposed"}');
+      logger.warning(
+          'Cannot subscribe: ${_atClient == null ? "atClient is null" : "service is disposed"}');
       return;
     }
 
@@ -111,7 +99,8 @@ class AtService extends ChangeNotifier {
 
     // Mark the time we start subscribing - only accept notifications after this point
     _subscriptionStartTime = DateTime.now();
-    logger.info('Will only accept notifications newer than: $_subscriptionStartTime');
+    logger.info(
+        'Will only accept notifications newer than: $_subscriptionStartTime');
 
     try {
       // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
@@ -122,29 +111,33 @@ class AtService extends ChangeNotifier {
       )
           .handleError((error, stackTrace) {
         // Catch errors from the stream itself (e.g., during decryption)
-        if (error.toString().contains('FileSystemException') || 
+        if (error.toString().contains('FileSystemException') ||
             error.toString().contains('File closed') ||
             error.toString().contains('exception in get')) {
-          logger.warning('File system error in notification decryption (database may be unavailable): $error');
+          logger.warning(
+              'File system error in notification decryption (database may be unavailable): $error');
           // Don't rethrow - just log and continue, keeping subscription alive
         } else {
-          logger.severe('Unexpected error in notification stream: $error', error, stackTrace);
+          logger.severe('Unexpected error in notification stream: $error',
+              error, stackTrace);
         }
-      })
-          .listen(
+      }).listen(
         (notification) {
           // Double-check not disposed before processing
           if (_isDisposed) {
-            logger.fine('Notification received but service is disposed, ignoring');
+            logger.fine(
+                'Notification received but service is disposed, ignoring');
             return;
           }
-          
+
           try {
             _handleNotification(notification);
           } catch (e, stackTrace) {
             // Catch any errors during notification handling to prevent stream closure
-            if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
-              logger.warning('File system error during notification handling (app may be shutting down): $e');
+            if (e.toString().contains('FileSystemException') ||
+                e.toString().contains('File closed')) {
+              logger.warning(
+                  'File system error during notification handling (app may be shutting down): $e');
             } else {
               logger.severe('Error handling notification: $e', e, stackTrace);
             }
@@ -152,18 +145,21 @@ class AtService extends ChangeNotifier {
         },
         onError: (error, stackTrace) {
           // Handle stream errors gracefully
-          if (error.toString().contains('FileSystemException') || 
+          if (error.toString().contains('FileSystemException') ||
               error.toString().contains('File closed') ||
               error.toString().contains('exception in get')) {
-            logger.warning('File system error in notification stream (likely app shutdown or database issue): $error');
+            logger.warning(
+                'File system error in notification stream (likely app shutdown or database issue): $error');
           } else {
-            logger.severe('Notification stream error: $error', error, stackTrace);
+            logger.severe(
+                'Notification stream error: $error', error, stackTrace);
           }
         },
         cancelOnError: false, // Keep subscription alive despite errors
       );
     } catch (e, stackTrace) {
-      logger.severe('Failed to create notification subscription: $e', e, stackTrace);
+      logger.severe(
+          'Failed to create notification subscription: $e', e, stackTrace);
     }
   }
 
@@ -177,9 +173,11 @@ class AtService extends ChangeNotifier {
 
     // Filter out old notifications - only accept notifications created after subscription started
     if (_subscriptionStartTime != null) {
-      final notificationTime = DateTime.fromMillisecondsSinceEpoch(notification.epochMillis);
+      final notificationTime =
+          DateTime.fromMillisecondsSinceEpoch(notification.epochMillis);
       if (notificationTime.isBefore(_subscriptionStartTime!)) {
-        logger.info('Ignoring old notification from $notificationTime (before subscription at $_subscriptionStartTime)');
+        logger.info(
+            'Ignoring old notification from $notificationTime (before subscription at $_subscriptionStartTime)');
         return;
       }
     }
@@ -207,8 +205,10 @@ class AtService extends ChangeNotifier {
 
       // Check if this looks like encrypted data that failed to decrypt
       if (value.length > 100 && !value.startsWith('{')) {
-        logger.warning('Received encrypted notification - decryption may have failed due to database issue');
-        logger.warning('This can happen after timeout when database is temporarily unavailable');
+        logger.warning(
+            'Received encrypted notification - decryption may have failed due to database issue');
+        logger.warning(
+            'This can happen after timeout when database is temporarily unavailable');
         return;
       }
 
@@ -229,10 +229,13 @@ class AtService extends ChangeNotifier {
         onAlertReceived?.call(alertData);
       }
     } catch (e, stackTrace) {
-      if (e.toString().contains('FileSystemException') || e.toString().contains('File closed')) {
-        logger.warning('File system error handling notification (database may be closing): $e');
+      if (e.toString().contains('FileSystemException') ||
+          e.toString().contains('File closed')) {
+        logger.warning(
+            'File system error handling notification (database may be closing): $e');
       } else if (e is FormatException) {
-        logger.warning('Failed to parse notification JSON - may be encrypted data: $e');
+        logger.warning(
+            'Failed to parse notification JSON - may be encrypted data: $e');
       } else {
         logger.severe('Failed to handle notification: $e', e, stackTrace);
       }
@@ -246,11 +249,11 @@ class AtService extends ChangeNotifier {
   void dispose() {
     logger.info('Disposing AtService - cancelling notification subscription');
     _isDisposed = true;
-    
+
     // Cancel subscription IMMEDIATELY to prevent processing notifications during shutdown
     _notificationSubscription?.cancel();
     _notificationSubscription = null;
-    
+
     super.dispose();
   }
 }

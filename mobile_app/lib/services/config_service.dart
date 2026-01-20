@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:kryz_shared/kryz_shared.dart';
 import 'package:logging/logging.dart';
-import 'package:at_client_mobile/at_client_mobile.dart';
+import 'package:at_client_flutter/at_client_flutter.dart';
 
 final logger = Logger('ConfigService');
 
@@ -125,7 +125,8 @@ class ConfigService extends ChangeNotifier {
   }
 
   /// Update a single gauge configuration
-  Future<void> updateGaugeConfig(String metricName, GaugeConfig newConfig) async {
+  Future<void> updateGaugeConfig(
+      String metricName, GaugeConfig newConfig) async {
     final gauges = Map<String, GaugeConfig>.from(config.gauges);
     gauges[metricName] = newConfig;
     final newDashboardConfig = DashboardConfig(
