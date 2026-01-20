@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:logging/logging.dart';
 import 'screens/onboarding_screen.dart';
@@ -14,6 +15,12 @@ void main() async {
   Logger.root.level = Level.ALL;
   Logger.root.onRecord.listen((record) {
     debugPrint('${record.level.name}: ${record.time}: ${record.message}');
+  });
+
+  // Keep the app running in background on Android
+  SystemChannels.lifecycle.setMessageHandler((msg) async {
+    debugPrint('SystemChannels> $msg');
+    return null;
   });
 
   // Initialize config service (will load from local first, then sync with atProtocol when connected)

@@ -42,24 +42,28 @@ class _GaugeWidgetState extends State<GaugeWidget>
     super.initState();
     _currentValue = widget.value;
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1200),
       vsync: this,
     );
     _animation =
         Tween<double>(begin: _currentValue, end: _currentValue).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
     );
+    // Start with the animation controller at 1.0 (completed)
+    _animationController.value = 1.0;
   }
 
   @override
   void didUpdateWidget(GaugeWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.value != widget.value) {
+      // Use the current animated value as the starting point for smoother transitions
+      final currentAnimatedValue = _animation.value;
       _animation = Tween<double>(
-        begin: _currentValue,
+        begin: currentAnimatedValue,
         end: widget.value,
       ).animate(
-        CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+        CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
       );
       _animationController.forward(from: 0.0).then((_) {
         _currentValue = widget.value;
