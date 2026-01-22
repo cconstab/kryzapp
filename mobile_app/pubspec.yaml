@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   
   # atPlatform SDK
-  at_client_flutter: ^0.1.0
+  at_client_flutter: 0.1.1
   at_utils: ^3.0.0
   
   # UI components
@@ -31,8 +31,6 @@ dependencies:
     path: ../shared
 
 dependency_overrides:
-  # Fix Android build compatibility issues
-  biometric_storage: ^5.0.1
   # Use forked flutter_keychain with V2 embedding support for Android builds
   # Comment this out when building for macOS to get keychain persistence
   flutter_keychain:

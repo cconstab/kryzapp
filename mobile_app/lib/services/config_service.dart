@@ -25,7 +25,7 @@ class ConfigService extends ChangeNotifier {
   /// Initialize with AtClient for syncing
   void setAtClient(AtClient? atClient) {
     _atClient = atClient;
-    
+
     // Subscribe to config notifications when connected
     if (_atClient != null) {
       _subscribeToConfigNotifications();
@@ -42,22 +42,23 @@ class ConfigService extends ChangeNotifier {
 
     try {
       logger.info('Subscribing to configuration update notifications');
-      
+
       _notificationSubscription = _atClient!.notificationService
           .subscribe(regex: '.*$_atKeyName.*', shouldDecrypt: true)
           .listen(
         (notification) async {
           try {
             logger.info('Received config update notification');
-            
+
             // Reload the config from atProtocol
             final updatedConfig = await _loadFromAtProtocol();
             if (updatedConfig != null && _currentConfig != null) {
               // Check what changed
               if (updatedConfig.stationName != _currentConfig!.stationName) {
-                logger.info('Station name updated: ${_currentConfig!.stationName} → ${updatedConfig.stationName}');
+                logger.info(
+                    'Station name updated: ${_currentConfig!.stationName} → ${updatedConfig.stationName}');
               }
-              
+
               _currentConfig = updatedConfig;
               notifyListeners();
             }
@@ -140,7 +141,8 @@ class ConfigService extends ChangeNotifier {
       // Use a shared key (shared with ourselves) to trigger notifications
       final atKey = AtKey()
         ..key = _atKeyName
-        ..sharedWith = currentAtSign // Share with ourselves to trigger notifications
+        ..sharedWith =
+            currentAtSign // Share with ourselves to trigger notifications
         ..metadata = (Metadata()
           ..ttr = -1 // Never expire
           ..ccd = true); // Send notification on change
