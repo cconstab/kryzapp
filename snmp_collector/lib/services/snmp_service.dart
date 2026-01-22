@@ -52,10 +52,10 @@ class SNMPService {
   }
 
   /// Collect transmitter statistics via SNMP
-  Future<TransmitterStats> collectStats() async {
+  Future<TransmitterStats> collectStats({String stationName = 'UNKNOWN'}) async {
     if (useSimulatedData || _session == null) {
       logger.fine('Using simulated data');
-      return _getSimulatedStats();
+      return _getSimulatedStats(stationName: stationName);
     }
 
     try {
@@ -114,6 +114,7 @@ class SNMPService {
 
       return TransmitterStats(
         transmitterId: 'KRYZ-TX-001',
+        stationName: stationName,
         timestamp: DateTime.now(),
         modulation: modulation,
         swr: swr,
@@ -166,7 +167,7 @@ class SNMPService {
 
   /// Generate simulated stats for testing without actual SNMP device
   /// Values match the default gauge ranges set in the mobile app
-  TransmitterStats _getSimulatedStats() {
+  TransmitterStats _getSimulatedStats({String stationName = 'UNKNOWN'}) {
     final now = DateTime.now();
     final random = _random.nextInt(100);
 
@@ -223,6 +224,7 @@ class SNMPService {
 
     return TransmitterStats(
       transmitterId: 'KRYZ-TX-001',
+      stationName: stationName,
       timestamp: now,
       modulation: modulation,
       swr: swr,

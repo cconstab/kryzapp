@@ -25,7 +25,7 @@ class ConfigService extends ChangeNotifier {
   /// Initialize with AtClient for syncing
   void setAtClient(AtClient? atClient) {
     _atClient = atClient;
-    
+
     // Subscribe to config notifications when connected
     if (_atClient != null) {
       _subscribeToConfigNotifications();
@@ -38,28 +38,41 @@ class ConfigService extends ChangeNotifier {
   void _subscribeToConfigNotifications() {
     _notificationSubscription?.cancel();
 
-    if (_atClient == null) return;
+    if (_atClient == null) {
+      logger.warning('Cannot subscribe: AtClient is null');
+      return;
+    }
+
+    final currentAtSign = _atClient!.getCurrentAtSign();
+    logger.info('Subscribing to config notifications for: $currentAtSign');
+    logger.info('Regex pattern: .*$_atKeyName.*');
 
     try {
-      logger.info('Subscribing to configuration update notifications');
-      
       _notificationSubscription = _atClient!.notificationService
           .subscribe(regex: '.*$_atKeyName.*', shouldDecrypt: true)
           .listen(
         (notification) async {
           try {
-            logger.info('Received config update notification');
-            
+            logger.info('🔔 Received config update notification!');
+            logger.info('Notification key: ${notification.key}');
+            logger.info('Notification from: ${notification.from}');
+            logger.info('Notification value: ${notification.value}');
+
             // Reload the config from atProtocol
             final updatedConfig = await _loadFromAtProtocol();
             if (updatedConfig != null && _currentConfig != null) {
               // Check what changed
               if (updatedConfig.stationName != _currentConfig!.stationName) {
-                logger.info('Station name updated: ${_currentConfig!.stationName} → ${updatedConfig.stationName}');
+                logger.info(
+                    '✅ Station name updated: ${_currentConfig!.stationName} → ${updatedConfig.stationName}');
               }
-              
+
               _currentConfig = updatedConfig;
               notifyListeners();
+              logger.info('✅ Config updated and listeners notified');
+            } else {
+              logger.warning(
+                  'Failed to load updated config or no current config');
             }
           } catch (e) {
             logger.warning('Error handling config notification: $e');
@@ -70,6 +83,7 @@ class ConfigService extends ChangeNotifier {
         },
         cancelOnError: false,
       );
+      logger.info('✅ Subscription active');
     } catch (e) {
       logger.severe('Failed to subscribe to config notifications: $e');
     }
@@ -137,16 +151,39 @@ class ConfigService extends ChangeNotifier {
       final currentAtSign = _atClient!.getCurrentAtSign();
       if (currentAtSign == null) return;
 
-      // Use a shared key (shared with ourselves) to trigger notifications
+      // Use a self key for storage
       final atKey = AtKey()
         ..key = _atKeyName
-        ..sharedWith = currentAtSign // Share with ourselves to trigger notifications
-        ..metadata = (Metadata()
-          ..ttr = -1 // Never expire
-          ..ccd = true); // Send notification on change
+        ..sharedWith = null // Self key
+        ..metadata = (Metadata()..ttr = -1); // Never expire
 
       final jsonString = jsonEncode(config.toJson());
+      logger.info('💾 Saving config to atProtocol: $currentAtSign:$_atKeyName');
+      logger.info('Config data: ${config.stationName}');
       await _atClient!.put(atKey, jsonString);
+      logger.info('✅ Config saved successfully');
+
+      // Send notification to ourselves to trigger updates on other devices
+      try {
+        final notificationKey = AtKey()
+          ..key = _atKeyName
+          ..sharedWith = currentAtSign
+          ..metadata = (Metadata()
+            ..ttl = 60000 // Notification expires in 60 seconds
+            ..ttr = -1);
+
+        logger.info('📤 Sending notification to self: $currentAtSign');
+        await _atClient!.notificationService.notify(
+          NotificationParams.forUpdate(
+            notificationKey,
+            value: jsonString,
+          ),
+        );
+        logger.info('✅ Notification sent successfully');
+      } catch (notifyError) {
+        logger.warning('Failed to send notification: $notifyError');
+        // Don't throw - config was saved even if notification failed
+      }
     } catch (e) {
       logger.warning('Failed to save to atProtocol: $e');
       rethrow;
@@ -163,13 +200,19 @@ class ConfigService extends ChangeNotifier {
 
       final atKey = AtKey()
         ..key = _atKeyName
-        ..sharedWith = currentAtSign; // Match the save format
+        ..sharedWith = null; // Self key
 
+      logger.info('📖 Loading config from atProtocol: $currentAtSign:$_atKeyName');
       final result = await _atClient!.get(atKey);
-      if (result.value == null) return null;
+      if (result.value == null) {
+        logger.info('No saved config found');
+        return null;
+      }
 
       final jsonData = jsonDecode(result.value) as Map<String, dynamic>;
-      return DashboardConfig.fromJson(jsonData);
+      final config = DashboardConfig.fromJson(jsonData);
+      logger.info('✅ Config loaded: ${config.stationName}');
+      return config;
     } catch (e) {
       logger.warning('Failed to load from atProtocol: $e');
       return null;

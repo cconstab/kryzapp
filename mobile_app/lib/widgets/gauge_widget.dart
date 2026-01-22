@@ -47,7 +47,8 @@ class _GaugeWidgetState extends State<GaugeWidget>
     );
     _animation =
         Tween<double>(begin: _currentValue, end: _currentValue).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
+      CurvedAnimation(
+          parent: _animationController, curve: Curves.easeInOutCubic),
     );
     // Start with the animation controller at 1.0 (completed)
     _animationController.value = 1.0;
@@ -63,7 +64,8 @@ class _GaugeWidgetState extends State<GaugeWidget>
         begin: currentAnimatedValue,
         end: widget.value,
       ).animate(
-        CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
+        CurvedAnimation(
+            parent: _animationController, curve: Curves.easeInOutCubic),
       );
       _animationController.forward(from: 0.0).then((_) {
         _currentValue = widget.value;

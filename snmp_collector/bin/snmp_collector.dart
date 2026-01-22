@@ -18,6 +18,7 @@ void main(List<String> arguments) async {
     ..addOption('keys', abbr: 'k', help: 'Path to the .atKeys file (default: ~/.atsign/keys/<atsign>_key.atKeys)')
     ..addOption('receivers',
         abbr: 'r', help: 'Comma-separated list of @signs to receive notifications', mandatory: true)
+    ..addOption('station-name', abbr: 'n', help: 'Station name/call sign (e.g., KRYZ-LPFM)', defaultsTo: 'UNKNOWN')
     ..addOption('host', abbr: 'h', help: 'SNMP host address', defaultsTo: '127.0.0.1')
     ..addOption('port', abbr: 'p', help: 'SNMP port', defaultsTo: '161')
     ..addOption('community', abbr: 'c', help: 'SNMP community string', defaultsTo: 'public')
@@ -49,6 +50,7 @@ void main(List<String> arguments) async {
         '${Platform.environment['HOME'] ?? Platform.environment['USERPROFILE']}/.atsign/keys/${atSign}_key.atKeys';
     final receiversArg = args['receivers'] as String;
     final receivers = receiversArg.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final stationName = args['station-name'] as String;
     final host = args['host'] as String;
     final port = int.parse(args['port'] as String);
     final community = args['community'] as String;
@@ -57,6 +59,7 @@ void main(List<String> arguments) async {
 
     logger.info('Starting KRYZ SNMP Collector');
     logger.info('@sign: $atSign');
+    logger.info('Station: $stationName');
     logger.info('Keys file: $keysPath');
     logger.info('SNMP host: $host:$port');
     logger.info('Data mode: ${useSimulated ? "SIMULATED" : "REAL SNMP"}');
@@ -66,6 +69,7 @@ void main(List<String> arguments) async {
     final collector = SNMPCollector(
       atSign: atSign,
       receivers: receivers,
+      stationName: stationName,
       transmitterHost: host,
       transmitterPort: port,
       community: community,

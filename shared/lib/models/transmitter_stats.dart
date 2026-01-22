@@ -1,6 +1,7 @@
 /// Data model for transmitter statistics
 class TransmitterStats {
   final String transmitterId;
+  final String stationName; // Station name/call sign
   final DateTime timestamp;
   final double modulation; // Modulation percentage (%)
   final double swr; // Standing Wave Ratio
@@ -13,6 +14,7 @@ class TransmitterStats {
 
   TransmitterStats({
     required this.transmitterId,
+    required this.stationName,
     required this.timestamp,
     required this.modulation,
     required this.swr,
@@ -28,6 +30,7 @@ class TransmitterStats {
   Map<String, dynamic> toJson() {
     return {
       'transmitterId': transmitterId,
+      'stationName': stationName,
       'timestamp': timestamp.toIso8601String(),
       'modulation': modulation,
       'swr': swr,
@@ -44,6 +47,7 @@ class TransmitterStats {
   factory TransmitterStats.fromJson(Map<String, dynamic> json) {
     return TransmitterStats(
       transmitterId: json['transmitterId'] as String,
+      stationName: json['stationName'] as String? ?? json['transmitterId'] as String, // Fallback to transmitterId
       timestamp: DateTime.parse(json['timestamp'] as String),
       modulation: (json['modulation'] as num).toDouble(),
       swr: (json['swr'] as num).toDouble(),

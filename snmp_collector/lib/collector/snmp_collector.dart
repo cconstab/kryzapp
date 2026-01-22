@@ -11,6 +11,7 @@ final logger = Logger('SNMPCollector');
 class SNMPCollector {
   final String atSign;
   final List<String> receivers;
+  final String stationName;
   final String transmitterHost;
   final int transmitterPort;
   final String community;
@@ -27,6 +28,7 @@ class SNMPCollector {
   SNMPCollector({
     required this.atSign,
     required this.receivers,
+    required this.stationName,
     required this.transmitterHost,
     this.transmitterPort = 161,
     this.community = 'public',
@@ -125,7 +127,7 @@ class SNMPCollector {
       logger.fine('Collecting transmitter stats');
 
       // Collect stats from transmitter via SNMP
-      final stats = await snmpService.collectStats();
+      final stats = await snmpService.collectStats(stationName: stationName);
 
       logger.info('Collected: $stats');
 

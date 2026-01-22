@@ -46,8 +46,14 @@ class KryzApp extends StatelessWidget {
       child: MaterialApp(
         title: 'KRYZ Transmitter Monitor',
         debugShowCheckedModeBanner: false, // Remove debug ribbon
-        theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true, brightness: Brightness.light),
-        darkTheme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true, brightness: Brightness.dark),
+        theme: ThemeData(
+            primarySwatch: Colors.blue,
+            useMaterial3: true,
+            brightness: Brightness.light),
+        darkTheme: ThemeData(
+            primarySwatch: Colors.blue,
+            useMaterial3: true,
+            brightness: Brightness.dark),
         home: const AppEntryPoint(),
       ),
     );

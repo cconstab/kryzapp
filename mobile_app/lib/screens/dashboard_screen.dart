@@ -131,8 +131,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final configService = Provider.of<ConfigService>(context);
-    final config = configService.config;
     final now = DateTime.now();
     final timeFormat = DateFormat('HH:mm:ss');
     final dateFormat = DateFormat('MMM dd, yyyy');
@@ -159,6 +157,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: const Icon(Icons.settings),
             tooltip: 'Settings',
             onPressed: () async {
+              final configService = Provider.of<ConfigService>(context, listen: false);
               await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) =>
@@ -201,7 +200,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 // Status card or waiting message
                 if (hasData && stats != null)
-                  StatusCard(stats: stats, stationName: config.stationName)
+                  StatusCard(stats: stats, stationName: stats.stationName)
                 else if (provider.isDataStale)
                   Card(
                     elevation: 4,
