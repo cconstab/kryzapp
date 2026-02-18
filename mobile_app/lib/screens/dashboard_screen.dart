@@ -18,6 +18,8 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   Timer? _clockTimer;
+  bool _alertActive = false; // Track if alert is currently active
+  bool _alertAcknowledged = false; // Track if user has acknowledged this alert
 
   @override
   void initState() {
@@ -53,8 +55,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     atService.onAlertReceived = (alert) {
       transmitterProvider.updateAlert(alert);
-      _showAlertDialog(alert);
+      
+      // Only show dialog if alert just became active AND user hasn't acknowledged it yet
+      // Once acknowledged, don't show it again until alert clears and comes back
+      if (!_alertActive) {
+        _alertActive = true;
+        _alertAcknowledged = false; // Reset acknowledgment for new alert condition
+      }
+      
+      if (!_alertAcknowledged) {
+        _alertAcknowledged = true;
+        _showAlertDialog(alert);
+      }
     };
+  }
+
+  String _hashAlert(Map<String, dynamic> alert) {
+    return '${alert['message']}_${alert['level']}';
   }
 
   void _syncConfigWithAtProtocol() async {
@@ -104,6 +121,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _showAlertDialog(Map<String, dynamic> alert) {
     showDialog(
       context: context,
+      barrierDismissible: false, // Force user to click OK
       builder: (context) => AlertDialog(
         title: Row(
           children: [
@@ -119,8 +137,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
-              Provider.of<TransmitterProvider>(context, listen: false)
-                  .clearAlert();
+              // Just close the dialog - _alertAcknowledged stays true
+              // so it won't pop up again until alert condition clears
             },
             child: const Text('OK'),
           ),
@@ -133,6 +151,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final configService = Provider.of<ConfigService>(context);
     final config = configService.config;
+    final transmitterProvider = Provider.of<TransmitterProvider>(context);
+    
+    // Check if alert has been cleared - if so, reset the alert flags
+    if (transmitterProvider.latestAlert == null && _alertActive) {
+      _alertActive = false;
+      _alertAcknowledged = false; // Ready to show modal again when alert returns
+    }
+    
     final now = DateTime.now();
     final timeFormat = DateFormat('HH:mm:ss');
     final dateFormat = DateFormat('MMM dd, yyyy');
