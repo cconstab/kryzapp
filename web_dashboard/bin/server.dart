@@ -15,6 +15,52 @@ final _log = Logger('KryzWebDashboard');
 
 // ── Connected WebSocket clients ───────────────────────────────────────────────
 final _clients = <WebSocketChannel>{};
+Map<String, dynamic>? _lastSyncStatus;
+Map<String, dynamic>? _lastConfigPayload;
+
+/// Convert a [DashboardConfig] to the `{type:'config', data:{...}}` WS payload.
+Map<String, dynamic> _configPayload(DashboardConfig cfg) {
+  return {
+    'type': 'config',
+    'data': {
+      'stationName': cfg.stationName,
+      'thresholds': cfg.gauges.map((key, g) => MapEntry(key, {
+        'unit':     g.unit,
+        'warnHigh': g.warningHighThreshold,
+        'critHigh': g.criticalHighThreshold,
+        'warnLow':  g.warningLowThreshold,
+        'critLow':  g.criticalLowThreshold,
+      })),
+    },
+  };
+}
+
+// ── History broadcast ────────────────────────────────────────────────────────
+// Tracked so we can detect out-of-order readings from sync.
+DateTime? _latestBroadcastTime;
+
+// Collection reference stored globally so sync events can push history.
+AtCollection<TransmitterStats>? _statsCollection;
+
+/// Push a fresh history batch (last [secs] seconds) to all WS clients.
+/// Called after each successful sync and on out-of-order readings so charts
+/// always show a monotone, sorted dataset.
+Future<void> _pushHistoryAll(int secs) async {
+  if (_statsCollection == null || _clients.isEmpty) return;
+  try {
+    final cutoff = DateTime.now().subtract(Duration(seconds: secs));
+    final items = await _statsCollection!
+        .query()
+        .where((item) => item.obj.timestamp.isAfter(cutoff))
+        .orderBy((item) => item.obj.timestamp)
+        .get();
+    final readings = items.map((i) => i.obj.toJson()).toList();
+    _broadcast({'type': 'history', 'data': readings});
+    _log.fine('Pushed ${readings.length} history readings to ${_clients.length} client(s)');
+  } catch (e) {
+    _log.warning('_pushHistoryAll error: $e');
+  }
+}
 
 void _broadcast(Object message) {
   final encoded = message is String ? message : jsonEncode(message);
@@ -78,6 +124,43 @@ void main(List<String> arguments) async {
   final atClient = AtClientManager.getInstance().atClient;
   _log.info('Authenticated as $atSign');
 
+  // ── Register sync progress listener ──────────────────────────────────────
+  atClient.syncService.addProgressListener(_SyncProgressBroadcaster());
+
+  // ── Load & watch DashboardConfig (thresholds) ───────────────────────────
+  Future<void> loadAndBroadcastConfig() async {
+    try {
+      final key = AtKey()
+        ..key = 'kryz_dashboard_config'
+        ..sharedWith = atSign;
+      final result = await atClient.get(key);
+      if (result.value != null) {
+        final cfg = DashboardConfig.fromJson(
+            jsonDecode(result.value as String) as Map<String, dynamic>);
+        _lastConfigPayload = _configPayload(cfg);
+        _log.info('DashboardConfig loaded from atProtocol');
+      } else {
+        // Fall back to shared defaults so the page still shows correct thresholds.
+        _lastConfigPayload = _configPayload(DashboardConfig.defaults());
+        _log.info('No stored config found — using defaults');
+      }
+    } catch (e) {
+      _lastConfigPayload = _configPayload(DashboardConfig.defaults());
+      _log.warning('Could not load DashboardConfig: $e — using defaults');
+    }
+    _broadcast(_lastConfigPayload!);
+  }
+
+  await loadAndBroadcastConfig();
+
+  // Re-broadcast whenever the config changes.
+  atClient.notificationService
+      .subscribe(regex: '.*kryz_dashboard_config.*', shouldDecrypt: true)
+      .listen((_) async {
+    _log.info('Config change notification received — reloading');
+    await loadAndBroadcastConfig();
+  });
+
   // ── Open the collection ───────────────────────────────────────────────────
   final collection = await atClient.collection<TransmitterStats>(
     'stats.kryz',
@@ -86,6 +169,7 @@ void main(List<String> arguments) async {
     typeTag: 'TransmitterStats',
   );
   _log.info('Collection opened (stats.kryz)');
+  _statsCollection = collection;
 
   // Stream new readings to all connected WebSocket clients.
   // CItemUpdated carries only (owner, id) — fetch the item to get the domain obj.
@@ -94,6 +178,18 @@ void main(List<String> arguments) async {
     if (citem == null) return;
     final stats = citem.obj;
     _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
+
+    // If this reading is older than the latest one we've already sent, it is a
+    // historical item arriving out-of-order during a sync catch-up.  Push a
+    // full sorted history snapshot instead of an individual point so charts
+    // stay monotone and don't show zigzag lines.
+    if (_latestBroadcastTime != null &&
+        stats.timestamp.isBefore(_latestBroadcastTime!)) {
+      _log.info('Out-of-order reading (${stats.timestamp}) — pushing full history refresh');
+      await _pushHistoryAll(604800);
+      return;
+    }
+    _latestBroadcastTime = stats.timestamp;
     _broadcast({'type': 'reading', 'data': stats.toJson()});
   });
 
@@ -124,6 +220,20 @@ void main(List<String> arguments) async {
       webSocketHandler((WebSocketChannel ws) {
         _clients.add(ws);
         _log.info('WebSocket client connected (total: ${_clients.length})');
+
+        // Send last known sync status + config immediately on connect.
+        if (_lastSyncStatus != null) {
+          ws.sink.add(jsonEncode(_lastSyncStatus));
+        }
+        if (_lastConfigPayload != null) {
+          ws.sink.add(jsonEncode(_lastConfigPayload));
+        }
+        // Proactively push current history (7 day max) so the client gets
+        // data without needing to wait for its own request to round-trip.
+        // applyReadings in the browser filters to the user's selected window.
+        if (_statsCollection != null) {
+          _pushHistoryAll(604800).ignore();
+        }
 
         // When client requests historical data it sends:
         //   {"action": "history", "window": <seconds>}
@@ -182,6 +292,36 @@ Response _serveIndex(Request _) {
   );
 }
 
+// ── Sync progress broadcaster ─────────────────────────────────────────────────
+// Receives periodic sync events from at_client and pushes them to all connected
+// WebSocket clients so the dashboard can show local vs server commit position.
+class _SyncProgressBroadcaster extends SyncProgressListener {
+  @override
+  void onSyncProgressEvent(SyncProgress syncProgress) {
+    _lastSyncStatus = {
+      'type': 'sync',
+      'data': {
+        'status': syncProgress.syncStatus?.name,
+        'localCommitId': syncProgress.localCommitId,
+        'serverCommitId': syncProgress.serverCommitId,
+        'pendingPushCount': syncProgress.pendingPushCount,
+        'atSign': syncProgress.atSign,
+        'message': syncProgress.message,
+      },
+    };
+    _broadcast(_lastSyncStatus!);
+
+    // After a successful sync, push fresh history to all connected clients.
+    // This is the primary mechanism for delivering historical data that wasn't
+    // yet in the local store when clients first connected.
+    if (syncProgress.syncStatus == SyncStatus.success) {
+      // Push the full 7-day window so clients on any time-window tab get
+      // their data.  applyReadings in the browser filters to currentWindow.
+      _pushHistoryAll(604800).ignore();
+    }
+  }
+}
+
 // ── Embedded dashboard HTML ───────────────────────────────────────────────────
 // Chart.js is loaded from CDN.  The page connects to the /ws WebSocket and
 // renders a live multi-metric dashboard.  Replace the CDN URL with a local
@@ -211,6 +351,26 @@ const _dashboardHtml = r'''
   .card{background:#1a1a1a;border-radius:8px;padding:12px}
   .card h2{font-size:.85rem;margin-bottom:8px;opacity:.7}
   canvas{width:100%!important;height:160px!important}
+  .meters{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:14px}
+  .meter{
+    background:#1a1a1a;border-radius:8px;padding:10px 14px;
+    border:1.5px solid #333;display:flex;flex-direction:column;gap:4px
+  }
+  .meter .m-label{font-size:.72rem;opacity:.6;text-transform:uppercase;letter-spacing:.05em}
+  .meter .m-value{font-size:1.6rem;font-weight:700;line-height:1}
+  .meter .m-unit{font-size:.72rem;opacity:.5}
+  .m-ok   {color:#4CAF50;border-color:#4CAF5066}
+  .m-warn {color:#FF9800;border-color:#FF980066}
+  .m-crit {color:#E53935;border-color:#E5393566}
+  .m-idle {color:#aaa}
+  .sync-bar{display:flex;gap:16px;align-items:center;font-size:.78rem;margin-bottom:10px;
+    padding:6px 12px;background:#1a1a1a;border-radius:6px;flex-wrap:wrap}
+  .sync-bar .lbl{font-weight:600;opacity:.9}
+  .sync-bar span{white-space:nowrap;opacity:.75}
+  .s-ok{color:#4CAF50!important;opacity:1!important}
+  .s-behind{color:#FF9800!important;opacity:1!important}
+  .s-syncing{color:#2196F3!important;opacity:1!important}
+  .s-error{color:#E53935!important;opacity:1!important}
 </style>
 </head>
 <body>
@@ -222,28 +382,68 @@ const _dashboardHtml = r'''
   <button data-w="604800"        >7 d</button>
   <span id="status">Connecting…</span>
 </div>
+<div class="sync-bar" id="syncBar">
+  <span class="lbl">Sync</span>
+  <span>Status: <b id="syncState">—</b></span>
+  <span>Local: <b id="syncLocal">—</b></span>
+  <span>Server: <b id="syncServer">—</b></span>
+  <span id="syncDiff"></span>
+  <span id="syncPending"></span>
+</div>
+<div class="meters" id="meters"></div>
 <div class="grid" id="grid"></div>
 
 <script>
 const METRICS = [
-  {key:'powerOut',  label:'Power Out (W)',       color:'#2196F3'},
-  {key:'powerRef',  label:'Power Reflected (W)',  color:'#E53935'},
-  {key:'swr',       label:'SWR (:1)',              color:'#FF9800'},
-  {key:'modulation',label:'Modulation (%)',        color:'#4CAF50'},
-  {key:'heatTemp',  label:'Heat Sink Temp (°C)',   color:'#F44336'},
-  {key:'fanSpeed',  label:'Fan Speed (RPM)',        color:'#9C27B0'},
+  {key:'modulation',label:'Modulation',        unit:'%',   color:'#4CAF50', warnLow:60,  critLow:50,  warnHigh:104, critHigh:105},
+  {key:'swr',       label:'SWR',               unit:':1',  color:'#FF9800',                           warnHigh:1.8, critHigh:3.0},
+  {key:'powerOut',  label:'Power Out',          unit:'W',   color:'#2196F3', warnLow:80,  critLow:50},
+  {key:'powerRef',  label:'Power Reflected',    unit:'W',   color:'#E53935',                           warnHigh:10,  critHigh:20},
+  {key:'heatTemp',  label:'Heat Sink Temp',     unit:'°C',  color:'#F44336',                           warnHigh:75,  critHigh:90},
+  {key:'fanSpeed',  label:'Fan Speed',          unit:'RPM', color:'#9C27B0'},
 ];
 
 const charts = {};
 let ws;
 let currentWindow = 3600;
 
+// ── Build meter cards (live readout) ─────────────────────────────────────
+const metersEl = document.getElementById('meters');
+for (const m of METRICS) {
+  const el = document.createElement('div');
+  el.className = 'meter m-idle';
+  el.id = 'm_' + m.key;
+  el.innerHTML = `<div class="m-label">${m.label}</div><div class="m-value" id="mv_${m.key}">—</div><div class="m-unit">${m.unit}</div>`;
+  metersEl.appendChild(el);
+}
+
+function _meterClass(m, v) {
+  if (v === null || v === undefined) return 'm-idle';
+  if ((m.critHigh !== undefined && v >= m.critHigh) ||
+      (m.critLow  !== undefined && v <= m.critLow))  return 'm-crit';
+  if ((m.warnHigh !== undefined && v >= m.warnHigh) ||
+      (m.warnLow  !== undefined && v <= m.warnLow))  return 'm-warn';
+  return 'm-ok';
+}
+
+function updateMeters(r) {
+  _lastReading = r;
+  for (const m of METRICS) {
+    const v = r[m.key];
+    const el = document.getElementById('m_' + m.key);
+    const cls = _meterClass(m, v);
+    el.className = 'meter ' + cls;
+    document.getElementById('mv_' + m.key).textContent =
+      (v !== null && v !== undefined) ? (+v).toFixed(1) : '—';
+  }
+}
+
 // ── Build chart cards ─────────────────────────────────────────────────────────
 const grid = document.getElementById('grid');
 for (const m of METRICS) {
   const card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = `<h2>${m.label}</h2><canvas id="c_${m.key}"></canvas>`;
+  card.innerHTML = `<h2>${m.label} (${m.unit})</h2><canvas id="c_${m.key}"></canvas>`;
   grid.appendChild(card);
 
   const ctx = document.getElementById(`c_${m.key}`).getContext('2d');
@@ -264,9 +464,22 @@ for (const m of METRICS) {
       animation: false,
       responsive: true,
       maintainAspectRatio: false,
+      interaction: {mode: 'index', intersect: false},
       scales: {
         x: {
           type: 'time',
+          time: {
+            displayFormats: {
+              millisecond: 'HH:mm:ss',
+              second:      'HH:mm:ss',
+              minute:      'HH:mm',
+              hour:        'HH:mm',
+              day:         'MMM d',
+              week:        'MMM d',
+              month:       'MMM yyyy',
+            },
+            tooltipFormat: 'yyyy-MM-dd HH:mm:ss',
+          },
           grid: {color:'#333'},
           ticks: {color:'#aaa', maxTicksLimit:6},
         },
@@ -275,12 +488,41 @@ for (const m of METRICS) {
           ticks: {color:'#aaa'},
         },
       },
-      plugins: {legend:{display:false}},
+      plugins: {
+        legend: {display: false},
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: 'rgba(0,0,0,0.85)',
+          titleColor: '#fff',
+          bodyColor: '#aaa',
+        },
+      },
     },
   });
 }
 
-// ── Gap detection ─────────────────────────────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────────────────────
+// Receives {stationName, thresholds:{powerOut:{unit,warnHigh,...}, ...}} from
+// the server.  Updates METRICS entries so _meterClass uses the correct values.
+let _lastReading = null;
+function applyConfig(d) {
+  if (!d || !d.thresholds) return;
+  document.title = (d.stationName || 'KRYZ') + ' — Dashboard';
+  for (const m of METRICS) {
+    const t = d.thresholds[m.key];
+    if (!t) continue;
+    if (t.unit     !== undefined) m.unit     = t.unit;
+    if (t.warnHigh !== undefined) m.warnHigh = t.warnHigh;
+    if (t.critHigh !== undefined) m.critHigh = t.critHigh;
+    if (t.warnLow  !== undefined) m.warnLow  = t.warnLow;
+    if (t.critLow  !== undefined) m.critLow  = t.critLow;
+  }
+  // Refresh meter colours with current data if we already have a reading.
+  if (_lastReading) updateMeters(_lastReading);
+}
+
+
 // Gap threshold = 3× the median inter-reading interval, derived from the data.
 // Stored as a rolling ring buffer so it adapts when the poll interval changes
 // without any code change.
@@ -331,19 +573,59 @@ function setStatus(msg) {
   document.getElementById('status').textContent = msg;
 }
 
+function updateSync(d) {
+  const stateEl   = document.getElementById('syncState');
+  const localEl   = document.getElementById('syncLocal');
+  const serverEl  = document.getElementById('syncServer');
+  const diffEl    = document.getElementById('syncDiff');
+  const pendEl    = document.getElementById('syncPending');
+  const status    = d.status ?? 'unknown';
+  stateEl.textContent = status;
+  stateEl.className   = status === 'success'   ? 's-ok'
+                      : status === 'started' || status === 'inProgress' ? 's-syncing'
+                      : status === 'failure'    ? 's-error' : '';
+  localEl.textContent  = d.localCommitId  ?? '—';
+  serverEl.textContent = d.serverCommitId ?? '—';
+  if (typeof d.localCommitId === 'number' && typeof d.serverCommitId === 'number') {
+    const diff = d.serverCommitId - d.localCommitId;
+    diffEl.textContent = diff === 0 ? '✓ up to date' : `${diff} behind`;
+    diffEl.className   = diff === 0 ? 's-ok' : 's-behind';
+  } else {
+    diffEl.textContent = '';
+  }
+  pendEl.textContent = (typeof d.pendingPushCount === 'number' && d.pendingPushCount > 0)
+    ? `(${d.pendingPushCount} pending push)` : '';
+  pendEl.className = (d.pendingPushCount > 0) ? 's-behind' : '';
+}
+
 function applyReadings(readings) {
+  // Server may push up to 7 days; trim to the currently selected window
+  // so the chart doesn't show more data than the user requested.
+  const cutoff = Date.now() - currentWindow * 1000;
+  const windowed = readings.filter(r => new Date(r.timestamp).getTime() >= cutoff);
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
-    ds.data = injectGaps(readings, m.key);
+    ds.data = injectGaps(windowed, m.key);
     charts[m.key].update('none');
   }
+  if (windowed.length > 0) updateMeters(windowed[windowed.length - 1]);
 }
 
 function appendReading(r) {
-  // Measure the interval once from the first metric (all share the same
-  // timestamps) and decide whether to insert a gap sentinel.
+  // Detect out-of-order: if this reading is older than the last real point on
+  // any chart, a historical sync catch-up item snuck through.  Re-request the
+  // full sorted history snapshot instead of appending, which would create a
+  // zigzag line jumping into the past and back.
   const firstDs = charts[METRICS[0].key].data.datasets[0];
   const lastReal = firstDs.data.findLast(p => p.y !== null);
+  if (lastReal && new Date(r.timestamp) < lastReal.x) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({action:'history', window: currentWindow}));
+    }
+    return;
+  }
+
+  // Normal in-order append with gap detection.
   let insertGap = false;
   if (lastReal) {
     const ms = new Date(r.timestamp) - lastReal.x;
@@ -362,6 +644,7 @@ function appendReading(r) {
     while (ds.data.length && ds.data[0].x.getTime() < cutoff) ds.data.shift();
     charts[m.key].update('none');
   }
+  updateMeters(r);
 }
 
 function connect() {
@@ -378,6 +661,8 @@ function connect() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'history') applyReadings(msg.data);
     else if (msg.type === 'reading') appendReading(msg.data);
+    else if (msg.type === 'sync') updateSync(msg.data);
+    else if (msg.type === 'config') applyConfig(msg.data);
   });
 
   ws.addEventListener('close', () => {

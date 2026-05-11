@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
-import 'package:at_client/at_client.dart' show CItem;
+import 'package:at_client/at_client.dart' show CItem, SyncProgress, SyncStatus;
 import 'package:kryz_shared/kryz_shared.dart';
 import '../providers/transmitter_provider.dart';
+import '../services/at_service.dart';
+import '../services/config_service.dart';
 
 /// Time windows shown as tabs.  The label is displayed in the TabBar;
 /// the [duration] is passed to [TransmitterProvider.historyStream].
@@ -23,74 +25,54 @@ enum _Window {
 class _MetricSpec {
   const _MetricSpec({
     required this.title,
-    required this.unit,
+    required this.configKey,
     required this.color,
     required this.extract,
-    this.warningHigh,
-    this.criticalHigh,
-    this.warningLow,
-    this.criticalLow,
     this.isAreaChart = false,
   });
 
   final String title;
-  final String unit;
+  final String configKey; // key into DashboardConfig / GaugeConfig.getDefaults()
   final Color color;
   final double Function(TransmitterStats) extract;
-  final double? warningHigh;
-  final double? criticalHigh;
-  final double? warningLow;
-  final double? criticalLow;
   final bool isAreaChart;
 }
 
 const _metrics = [
   _MetricSpec(
-    title: 'Power Out',
-    unit: 'W',
-    color: Color(0xFF2196F3),
-    extract: _powerOut,
-    warningLow: 80,
-    criticalLow: 50,
-  ),
-  _MetricSpec(
-    title: 'Power Reflected',
-    unit: 'W',
-    color: Color(0xFFE53935),
-    extract: _powerRef,
-    warningHigh: 10,
-    criticalHigh: 20,
+    title: 'Modulation',
+    configKey: 'modulation',
+    color: Color(0xFF4CAF50),
+    extract: _modulation,
   ),
   _MetricSpec(
     title: 'SWR',
-    unit: ':1',
+    configKey: 'swr',
     color: Color(0xFFFF9800),
     extract: _swr,
-    warningHigh: 1.8,
-    criticalHigh: 3.0,
   ),
   _MetricSpec(
-    title: 'Modulation',
-    unit: '%',
-    color: Color(0xFF4CAF50),
-    extract: _modulation,
-    warningLow: 60,
-    criticalLow: 50,
-    warningHigh: 104,
-    criticalHigh: 105,
+    title: 'Power Out',
+    configKey: 'powerOut',
+    color: Color(0xFF2196F3),
+    extract: _powerOut,
+  ),
+  _MetricSpec(
+    title: 'Power Reflected',
+    configKey: 'powerRef',
+    color: Color(0xFFE53935),
+    extract: _powerRef,
   ),
   _MetricSpec(
     title: 'Heat Sink Temp',
-    unit: '°C',
+    configKey: 'heatTemp',
     color: Color(0xFFF44336),
     extract: _heatTemp,
-    warningHigh: 75,
-    criticalHigh: 90,
     isAreaChart: true,
   ),
   _MetricSpec(
     title: 'Fan Speed',
-    unit: 'RPM',
+    configKey: 'fanSpeed',
     color: Color(0xFF9C27B0),
     extract: _fanSpeed,
   ),
@@ -174,9 +156,19 @@ class MetricsScreen extends StatelessWidget {
             ],
           ),
         ),
-        body: TabBarView(
+        body: Column(
           children: [
-            for (final w in _Window.values) _MetricsTab(window: w),
+            Consumer<AtService>(
+              builder: (context, atService, _) =>
+                  _SyncStatusBar(sync: atService.latestSync),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  for (final w in _Window.values) _MetricsTab(window: w),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -184,80 +176,114 @@ class MetricsScreen extends StatelessWidget {
   }
 }
 
-class _MetricsTab extends StatelessWidget {
+class _MetricsTab extends StatefulWidget {
   const _MetricsTab({required this.window});
 
   final _Window window;
 
   @override
-  Widget build(BuildContext context) {
-    final provider = Provider.of<TransmitterProvider>(context, listen: false);
+  State<_MetricsTab> createState() => _MetricsTabState();
+}
 
-    if (!provider.hasCollection) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text(
-                'Waiting for collection…\nMake sure the app is authenticated.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
+class _MetricsTabState extends State<_MetricsTab> {
+  Stream<List<CItem<TransmitterStats>>>? _stream;
+  TransmitterProvider? _provider;
+  SyncProgress? _lastSync;
+
+  void _rebuildStream(TransmitterProvider provider) {
+    _provider = provider;
+    _stream = provider.historyStream(widget.window.duration);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final provider = Provider.of<TransmitterProvider>(context);
+    final atService = Provider.of<AtService>(context);
+
+    // Create stream the first time the collection is ready, or if the
+    // provider instance changes (re-authentication).
+    if (provider.hasCollection && (_provider != provider || _stream == null)) {
+      _rebuildStream(provider);
     }
 
+    // Recreate the stream after every successful sync so that historical
+    // items that were just downloaded are immediately visible.  Without this
+    // the watch() stream may not re-emit for items that arrived via sync.
+    final sync = atService.latestSync;
+    if (sync != null &&
+        sync != _lastSync &&
+        sync.syncStatus == SyncStatus.success &&
+        provider.hasCollection) {
+      _lastSync = sync;
+      _rebuildStream(provider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return StreamBuilder<List<CItem<TransmitterStats>>>(
-      stream: provider.historyStream(window.duration),
+      stream: _stream, // null while collection not yet ready → empty snapshot
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            !snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
+        final dataPoints =
+            (snapshot.data ?? []).map((i) => i.obj).toList();
+        final isLoading = !snapshot.hasData;
 
-        final items = snapshot.data ?? [];
-        final dataPoints = items.map((i) => i.obj).toList();
-
-        if (dataPoints.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.bar_chart,
-                      size: 64, color: Theme.of(context).colorScheme.outline),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No data in the last ${window.label}',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Readings are collected while the SNMP collector is running.',
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+        return Stack(
+          children: [
+            ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: _metrics.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (context, i) => _MetricCard(
+                  spec: _metrics[i], data: dataPoints, window: widget.window),
             ),
-          );
-        }
-
-        return ListView.separated(
-          padding: const EdgeInsets.all(12),
-          itemCount: _metrics.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) =>
-              _MetricCard(spec: _metrics[i], data: dataPoints, window: window),
+            // Subtle banner shown while waiting for the first data.
+            // Charts are visible behind it so the layout doesn't block.
+            if (isLoading)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withValues(alpha: 0.9),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                        SizedBox(width: 10),
+                        Text('Syncing history…',
+                            style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
   }
+}
+
+/// Returns green / orange / red depending on which threshold zone [value] sits in.
+Color _alertColorFromConfig(double? value, GaugeConfig cfg) {
+  if (value == null) return Colors.grey;
+  if (cfg.criticalHighThreshold != null && value >= cfg.criticalHighThreshold!) return Colors.red;
+  if (cfg.criticalLowThreshold  != null && value <= cfg.criticalLowThreshold!)  return Colors.red;
+  if (cfg.warningHighThreshold  != null && value >= cfg.warningHighThreshold!)  return Colors.orange;
+  if (cfg.warningLowThreshold   != null && value <= cfg.warningLowThreshold!)   return Colors.orange;
+  return Colors.green;
 }
 
 class _MetricCard extends StatelessWidget {
@@ -273,35 +299,50 @@ class _MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Thresholds come from ConfigService (user-configurable, synced via atProtocol)
+    // so they always match the gauge screen — no hardcoding here.
+    final cfg = Provider.of<ConfigService>(context, listen: false)
+        .config
+        .getConfig(spec.configKey);
+
     final latest = data.isNotEmpty ? spec.extract(data.last) : null;
     final latestStr =
-        latest != null ? '${latest.toStringAsFixed(1)} ${spec.unit}' : '—';
+        latest != null ? '${latest.toStringAsFixed(1)} ${cfg.unit}' : '—';
 
-    // Build threshold plot bands
+    // Alert status for the current reading — drives card border + value colour.
+    final alertColor = _alertColorFromConfig(latest, cfg);
+
+    // Threshold lines: a 1.5 px line at each threshold value.
+    // Only visible when the auto-scaled Y axis includes the threshold,
+    // so they come into view as data approaches a limit.
     final plotBands = <PlotBand>[
-      if (spec.warningHigh != null && spec.criticalHigh != null)
+      if (cfg.warningHighThreshold != null)
         PlotBand(
-          start: spec.warningHigh,
-          end: spec.criticalHigh,
-          color: Colors.orange.withOpacity(0.15),
+          start: cfg.warningHighThreshold,
+          end: cfg.warningHighThreshold,
+          borderColor: Colors.orange.withValues(alpha: 0.8),
+          borderWidth: 1.5,
         ),
-      if (spec.criticalHigh != null)
+      if (cfg.criticalHighThreshold != null)
         PlotBand(
-          start: spec.criticalHigh,
-          end: double.infinity,
-          color: Colors.red.withOpacity(0.15),
+          start: cfg.criticalHighThreshold,
+          end: cfg.criticalHighThreshold,
+          borderColor: Colors.red.withValues(alpha: 0.8),
+          borderWidth: 1.5,
         ),
-      if (spec.warningLow != null && spec.criticalLow != null)
+      if (cfg.warningLowThreshold != null)
         PlotBand(
-          start: spec.criticalLow,
-          end: spec.warningLow,
-          color: Colors.orange.withOpacity(0.15),
+          start: cfg.warningLowThreshold,
+          end: cfg.warningLowThreshold,
+          borderColor: Colors.orange.withValues(alpha: 0.8),
+          borderWidth: 1.5,
         ),
-      if (spec.criticalLow != null)
+      if (cfg.criticalLowThreshold != null)
         PlotBand(
-          start: double.negativeInfinity,
-          end: spec.criticalLow,
-          color: Colors.red.withOpacity(0.15),
+          start: cfg.criticalLowThreshold,
+          end: cfg.criticalLowThreshold,
+          borderColor: Colors.red.withValues(alpha: 0.8),
+          borderWidth: 1.5,
         ),
     ];
 
@@ -324,7 +365,7 @@ class _MetricCard extends StatelessWidget {
               yValueMapper: (p, _) => p.value,
               emptyPointSettings:
                   const EmptyPointSettings(mode: EmptyPointMode.gap),
-              color: spec.color.withOpacity(0.4),
+              color: spec.color.withValues(alpha: 0.4),
               borderColor: spec.color,
               borderWidth: 2,
               markerSettings: markerSettings,
@@ -344,6 +385,11 @@ class _MetricCard extends StatelessWidget {
           ];
 
     return Card(
+      shape: RoundedRectangleBorder(
+        side: BorderSide(
+            color: alertColor.withValues(alpha: 0.6), width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
         child: Column(
@@ -372,7 +418,7 @@ class _MetricCard extends StatelessWidget {
                 Text(
                   latestStr,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: spec.color,
+                        color: alertColor,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
@@ -385,11 +431,12 @@ class _MetricCard extends StatelessWidget {
                 plotAreaBorderWidth: 0,
                 primaryXAxis: DateTimeAxis(
                   isVisible: true,
-                  majorGridLines: const MajorGridLines(width: 0),
+                  majorGridLines: const MajorGridLines(
+                      width: 0.3, color: Color(0x33888888)),
                   axisLine: const AxisLine(width: 0),
                   dateFormat: _dateFormatFor(window),
-                  intervalType: _intervalTypeFor(window),
-                  interval: _intervalFor(window),
+                  desiredIntervals: 5,
+                  labelRotation: -35,
                   labelStyle: const TextStyle(fontSize: 9),
                 ),
                 primaryYAxis: NumericAxis(
@@ -400,9 +447,16 @@ class _MetricCard extends StatelessWidget {
                   labelFormat: '{value}',
                   labelStyle: const TextStyle(fontSize: 9),
                 ),
+                crosshairBehavior: CrosshairBehavior(
+                  enable: true,
+                  activationMode: ActivationMode.singleTap,
+                  lineType: CrosshairLineType.vertical,
+                  shouldAlwaysShow: false,
+                ),
                 tooltipBehavior: TooltipBehavior(
                   enable: true,
-                  format: 'point.x\npoint.y ${spec.unit}',
+                  header: spec.title,
+                  format: 'point.x : point.y ${cfg.unit}',
                 ),
                 series: series,
               ),
@@ -417,37 +471,93 @@ class _MetricCard extends StatelessWidget {
     switch (w) {
       case _Window.hour1:
       case _Window.hour6:
-        return DateFormat('HH:mm');
       case _Window.hour24:
         return DateFormat('HH:mm');
       case _Window.days7:
         return DateFormat('MM/dd HH:mm');
     }
   }
+}
 
-  DateTimeIntervalType _intervalTypeFor(_Window w) {
-    switch (w) {
-      case _Window.hour1:
-        return DateTimeIntervalType.minutes;
-      case _Window.hour6:
-        return DateTimeIntervalType.hours;
-      case _Window.hour24:
-        return DateTimeIntervalType.hours;
-      case _Window.days7:
-        return DateTimeIntervalType.days;
-    }
-  }
+// ── Sync status bar ───────────────────────────────────────────────────────────
+class _SyncStatusBar extends StatelessWidget {
+  const _SyncStatusBar({required this.sync});
 
-  double _intervalFor(_Window w) {
-    switch (w) {
-      case _Window.hour1:
-        return 10; // tick every 10 min
-      case _Window.hour6:
-        return 1; // tick every 1 h
-      case _Window.hour24:
-        return 4; // tick every 4 h
-      case _Window.days7:
-        return 1; // tick every 1 day
+  final SyncProgress? sync;
+
+  @override
+  Widget build(BuildContext context) {
+    if (sync == null) return const SizedBox.shrink();
+
+    final local = sync!.localCommitId;
+    final server = sync!.serverCommitId;
+    final pending = sync!.pendingPushCount ?? 0;
+    final status = sync!.syncStatus;
+
+    Color statusColor;
+    String statusLabel;
+    switch (status) {
+      case SyncStatus.success:
+        statusColor = Colors.green;
+        statusLabel = 'synced';
+        break;
+      case SyncStatus.inProgress:
+      case SyncStatus.started:
+        statusColor = Colors.blue;
+        statusLabel = 'syncing…';
+        break;
+      case SyncStatus.failure:
+        statusColor = Colors.red;
+        statusLabel = 'error';
+        break;
+      default:
+        statusColor = Colors.grey;
+        statusLabel = 'idle';
     }
+
+    int? diff;
+    if (local != null && server != null) diff = server - local;
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.sync, size: 14, color: statusColor),
+            const SizedBox(width: 6),
+            Text(statusLabel,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: statusColor,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 12),
+            Text('Local: ${local ?? '—'}',
+                style: const TextStyle(fontSize: 11)),
+            const SizedBox(width: 8),
+            Text('Server: ${server ?? '—'}',
+                style: const TextStyle(fontSize: 11)),
+            if (diff != null) ...[
+              const SizedBox(width: 8),
+              Text(
+                diff == 0 ? '✓ up to date' : '$diff behind',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: diff == 0 ? Colors.green : Colors.orange),
+              ),
+            ],
+            if (pending > 0) ...[
+              const SizedBox(width: 8),
+              Text('($pending pending)',
+                  style: const TextStyle(fontSize: 11, color: Colors.orange)),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

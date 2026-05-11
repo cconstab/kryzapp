@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:at_client_flutter/at_client_flutter.dart';
-import 'package:at_client/at_client.dart' show AtCollection;
 import 'package:at_auth/at_auth.dart';
 import 'package:logging/logging.dart';
 import 'package:kryz_shared/kryz_shared.dart';
@@ -22,6 +21,10 @@ class AtService extends ChangeNotifier {
   // Alert notifications remain on the notification service for immediate delivery
   StreamSubscription? _alertSubscription;
 
+  // Sync progress tracking
+  SyncProgress? _latestSync;
+  SyncProgressListener? _syncListener;
+
   // Callbacks wired up by DashboardScreen
   Function(TransmitterStats)? onStatsReceived;
   Function(Map<String, dynamic>)? onAlertReceived;
@@ -33,6 +36,9 @@ class AtService extends ChangeNotifier {
 
   /// Exposed so that [TransmitterProvider] can run historical queries.
   AtCollection<TransmitterStats>? get statsCollection => _statsCollection;
+
+  /// Latest sync progress event — null until the first sync cycle completes.
+  SyncProgress? get latestSync => _latestSync;
 
   /// Initialize the service after successful authentication
   /// This should be called after PkamDialog.show() succeeds with AtClientPreference
@@ -70,6 +76,13 @@ class AtService extends ChangeNotifier {
       // Open the collection and start listening for new readings + alerts
       await _subscribeToCollection();
 
+      // Register sync progress listener so the UI can show local vs server commit.
+      _syncListener = _SyncListenerImpl((progress) {
+        _latestSync = progress;
+        notifyListeners();
+      });
+      _atClient!.syncService.addProgressListener(_syncListener!);
+
       notifyListeners();
     } catch (e, stackTrace) {
       logger.severe('Failed to initialize atClient', e, stackTrace);
@@ -80,6 +93,12 @@ class AtService extends ChangeNotifier {
   /// Reset/logout - clear the current session
   void reset() {
     logger.info('Resetting AtService');
+    // Remove sync listener before clearing atClient reference.
+    if (_syncListener != null && _atClient != null) {
+      _atClient!.syncService.removeProgressListener(_syncListener!);
+      _syncListener = null;
+    }
+    _latestSync = null;
     _isInitialized = false;
     _currentAtSign = null;
     _atClient = null;
@@ -193,6 +212,11 @@ class AtService extends ChangeNotifier {
     logger.info('Disposing AtService');
     _isDisposed = true;
 
+    if (_syncListener != null && _atClient != null) {
+      _atClient!.syncService.removeProgressListener(_syncListener!);
+      _syncListener = null;
+    }
+
     _collectionSub?.cancel();
     _collectionSub = null;
 
@@ -201,4 +225,14 @@ class AtService extends ChangeNotifier {
 
     super.dispose();
   }
+}
+
+// ── Private helper ────────────────────────────────────────────────────────────
+class _SyncListenerImpl extends SyncProgressListener {
+  _SyncListenerImpl(this._onProgress);
+  final void Function(SyncProgress) _onProgress;
+
+  @override
+  void onSyncProgressEvent(SyncProgress syncProgress) =>
+      _onProgress(syncProgress);
 }
