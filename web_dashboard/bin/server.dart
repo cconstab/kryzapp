@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:args/args.dart';
@@ -25,12 +26,12 @@ Map<String, dynamic> _configPayload(DashboardConfig cfg) {
     'data': {
       'stationName': cfg.stationName,
       'thresholds': cfg.gauges.map((key, g) => MapEntry(key, {
-        'unit':     g.unit,
-        'warnHigh': g.warningHighThreshold,
-        'critHigh': g.criticalHighThreshold,
-        'warnLow':  g.warningLowThreshold,
-        'critLow':  g.criticalLowThreshold,
-      })),
+            'unit': g.unit,
+            'warnHigh': g.warningHighThreshold,
+            'critHigh': g.criticalHighThreshold,
+            'warnLow': g.warningLowThreshold,
+            'critLow': g.criticalLowThreshold,
+          })),
     },
   };
 }
@@ -56,7 +57,8 @@ Future<void> _pushHistoryAll(int secs) async {
         .get();
     final readings = items.map((i) => i.obj.toJson()).toList();
     _broadcast({'type': 'history', 'data': readings});
-    _log.fine('Pushed ${readings.length} history readings to ${_clients.length} client(s)');
+    _log.fine(
+        'Pushed ${readings.length} history readings to ${_clients.length} client(s)');
   } catch (e) {
     _log.warning('_pushHistoryAll error: $e');
   }
@@ -179,14 +181,15 @@ void main(List<String> arguments) async {
     final stats = citem.obj;
     _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
 
-    // If this reading is older than the latest one we've already sent, it is a
-    // historical item arriving out-of-order during a sync catch-up.  Push a
-    // full sorted history snapshot instead of an individual point so charts
-    // stay monotone and don't show zigzag lines.
+    // If this reading arrived out-of-order (older than the latest we've sent),
+    // it is a historical item arriving mid-sync.  Skip broadcasting it as a
+    // live reading — the periodic 30-second history push will include it in a
+    // correctly sorted snapshot.  Pushing a full history here was causing
+    // repeated partial-data snapshots during the initial sync.
     if (_latestBroadcastTime != null &&
         stats.timestamp.isBefore(_latestBroadcastTime!)) {
-      _log.info('Out-of-order reading (${stats.timestamp}) — pushing full history refresh');
-      await _pushHistoryAll(604800);
+      _log.fine(
+          'Skipping out-of-order reading (${stats.timestamp}); will appear in next history push');
       return;
     }
     _latestBroadcastTime = stats.timestamp;
@@ -228,11 +231,27 @@ void main(List<String> arguments) async {
         if (_lastConfigPayload != null) {
           ws.sink.add(jsonEncode(_lastConfigPayload));
         }
-        // Proactively push current history (7 day max) so the client gets
-        // data without needing to wait for its own request to round-trip.
-        // applyReadings in the browser filters to the user's selected window.
+        // Push current 7-day history DIRECTLY to this client (not broadcast)
+        // so it gets data immediately without waiting for a sync event.
+        // We send directly to ws.sink so this is not affected by other clients'
+        // currentWindow — the browser filters to its own selected window.
         if (_statsCollection != null) {
-          _pushHistoryAll(604800).ignore();
+          () async {
+            try {
+              final cutoff = DateTime.now().subtract(const Duration(days: 7));
+              final items = await _statsCollection!
+                  .query()
+                  .where((item) => item.obj.timestamp.isAfter(cutoff))
+                  .orderBy((item) => item.obj.timestamp)
+                  .get();
+              final readings = items.map((i) => i.obj.toJson()).toList();
+              _log.info(
+                  'Sending ${readings.length} history items to new client');
+              ws.sink.add(jsonEncode({'type': 'history', 'data': readings}));
+            } catch (e) {
+              _log.warning('History push to new client failed: $e');
+            }
+          }();
         }
 
         // When client requests historical data it sends:
@@ -275,6 +294,16 @@ void main(List<String> arguments) async {
       'Dashboard running at http://${server.address.host}:${server.port}');
   _log.info(
       'Open that URL in any browser — no atSign required in the browser.');
+
+  // Safety-net: push 7-day history to all connected clients every 30 seconds.
+  // This catches cases where sync completed AFTER the initial per-client push
+  // (e.g., large initial sync on a fresh installation) and ensures historical
+  // data appears within at most 30 seconds of sync completing.
+  Timer.periodic(const Duration(seconds: 30), (_) {
+    if (_clients.isNotEmpty) {
+      _pushHistoryAll(604800).ignore();
+    }
+  });
 
   // Clean shutdown
   ProcessSignal.sigint.watch().listen((_) async {
@@ -612,18 +641,14 @@ function applyReadings(readings) {
 }
 
 function appendReading(r) {
-  // Detect out-of-order: if this reading is older than the last real point on
-  // any chart, a historical sync catch-up item snuck through.  Re-request the
-  // full sorted history snapshot instead of appending, which would create a
-  // zigzag line jumping into the past and back.
   const firstDs = charts[METRICS[0].key].data.datasets[0];
   const lastReal = firstDs.data.findLast(p => p.y !== null);
-  if (lastReal && new Date(r.timestamp) < lastReal.x) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({action:'history', window: currentWindow}));
-    }
-    return;
-  }
+
+  // Out-of-order: reading is older than the latest chart point.
+  // Silently drop it \u2014 the 30-second periodic history push will include it in a
+  // correctly sorted snapshot.  Requesting a full refresh here caused the
+  // chart to flicker and clear on every sync catch-up item.
+  if (lastReal && new Date(r.timestamp) < lastReal.x) return;
 
   // Normal in-order append with gap detection.
   let insertGap = false;

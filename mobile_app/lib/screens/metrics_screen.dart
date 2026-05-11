@@ -32,7 +32,8 @@ class _MetricSpec {
   });
 
   final String title;
-  final String configKey; // key into DashboardConfig / GaugeConfig.getDefaults()
+  final String
+      configKey; // key into DashboardConfig / GaugeConfig.getDefaults()
   final Color color;
   final double Function(TransmitterStats) extract;
   final bool isAreaChart;
@@ -225,8 +226,7 @@ class _MetricsTabState extends State<_MetricsTab> {
     return StreamBuilder<List<CItem<TransmitterStats>>>(
       stream: _stream, // null while collection not yet ready → empty snapshot
       builder: (context, snapshot) {
-        final dataPoints =
-            (snapshot.data ?? []).map((i) => i.obj).toList();
+        final dataPoints = (snapshot.data ?? []).map((i) => i.obj).toList();
         final isLoading = !snapshot.hasData;
 
         return Stack(
@@ -248,8 +248,8 @@ class _MetricsTabState extends State<_MetricsTab> {
                 child: Material(
                   color: Colors.transparent,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     color: Theme.of(context)
                         .colorScheme
                         .surfaceContainerHighest
@@ -279,10 +279,14 @@ class _MetricsTabState extends State<_MetricsTab> {
 /// Returns green / orange / red depending on which threshold zone [value] sits in.
 Color _alertColorFromConfig(double? value, GaugeConfig cfg) {
   if (value == null) return Colors.grey;
-  if (cfg.criticalHighThreshold != null && value >= cfg.criticalHighThreshold!) return Colors.red;
-  if (cfg.criticalLowThreshold  != null && value <= cfg.criticalLowThreshold!)  return Colors.red;
-  if (cfg.warningHighThreshold  != null && value >= cfg.warningHighThreshold!)  return Colors.orange;
-  if (cfg.warningLowThreshold   != null && value <= cfg.warningLowThreshold!)   return Colors.orange;
+  if (cfg.criticalHighThreshold != null && value >= cfg.criticalHighThreshold!)
+    return Colors.red;
+  if (cfg.criticalLowThreshold != null && value <= cfg.criticalLowThreshold!)
+    return Colors.red;
+  if (cfg.warningHighThreshold != null && value >= cfg.warningHighThreshold!)
+    return Colors.orange;
+  if (cfg.warningLowThreshold != null && value <= cfg.warningLowThreshold!)
+    return Colors.orange;
   return Colors.green;
 }
 
@@ -386,8 +390,7 @@ class _MetricCard extends StatelessWidget {
 
     return Card(
       shape: RoundedRectangleBorder(
-        side: BorderSide(
-            color: alertColor.withValues(alpha: 0.6), width: 1.5),
+        side: BorderSide(color: alertColor.withValues(alpha: 0.6), width: 1.5),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Padding(
