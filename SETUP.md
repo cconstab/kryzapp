@@ -1,198 +1,191 @@
-# KRYZ Transmitter Monitoring System - Setup Guide
-
-This guide will help you set up and run the complete KRYZ transmitter monitoring system using the atPlatform.
+# KRYZ Transmitter Monitoring System — Setup Guide
 
 ## Overview
 
-The system consists of:
-1. **SNMP Collector** - Dart application that collects transmitter stats
-2. **Mobile Application** - Flutter app for monitoring
-3. **Shared Models** - Common data structures
+Four packages make up the system:
+
+| Package | Language | Purpose |
+|---------|----------|---------|
+| `shared/` | Dart | Shared data model + config |
+| `snmp_collector/` | Dart (CLI) | Polls SNMP, writes `AtCollection`, sends alerts |
+| `mobile_app/` | Flutter | Live gauges + historical charts (iOS/Android/macOS) |
+| `web_dashboard/` | Dart (CLI) | shelf server → Chart.js browser dashboard |
+
+---
 
 ## Prerequisites
 
-### Required Software
-- **Dart SDK** 3.0 or later - [Download](https://dart.dev/get-dart)
-- **Flutter SDK** 3.0 or later - [Download](https://flutter.dev/docs/get-started/install)
-- **Git** - For version control
+| Requirement | Version | Download |
+|-------------|---------|----------|
+| Dart SDK | ≥ 3.0 | https://dart.dev/get-dart |
+| Flutter SDK | ≥ 3.0 | https://flutter.dev/docs/get-started/install |
+| @signs (≥ 2) | — | https://atsign.com (free) |
 
-### Required @signs
+### @signs you need
 
-You need at least 2 @signs (get free @signs at https://atsign.com):
+- **Collector @sign** (e.g. `@snmp_collector`) — runs on the server/Raspberry Pi
+- **Receiver @sign** (e.g. `@bob`) — used by the mobile app and/or web dashboard
 
-1. `@snmp_collector` (or any name) - For the collector service
-2. `@bob` (or any name) - For the mobile app user
+Both @signs must be in `shared/lib/config/atsign_config.dart` → `KryzAtSigns.authorizedReceivers`.
 
-### Get Your @signs
+Download the `.atKeys` file for each @sign from https://my.atsign.com.
 
-1. Visit https://atsign.com
-2. Sign up for a free account
-3. Claim your @signs
-4. Download the .atKeys files for each @sign
+---
 
-## Step 1: Initial Setup
-
-### 1.1 Clone or Download the Project
+## Step 1: Install dependencies
 
 ```bash
-cd c:\Users\colin\kryzapp
+cd shared          && dart pub get   && cd ..
+cd snmp_collector  && dart pub get   && cd ..
+cd mobile_app      && flutter pub get && cd ..
+cd web_dashboard   && dart pub get   && cd ..
 ```
 
-### 1.2 Install Shared Package Dependencies
+---
+
+## Step 2: Configure authorised receivers
+
+Edit `shared/lib/config/atsign_config.dart`:
+
+```dart
+class KryzAtSigns {
+  static const List<String> authorizedReceivers = [
+    '@kryz_mobile',
+    '@bob',           // add your receiver @sign(s) here
+  ];
+}
+```
+
+---
+
+## Step 3: SNMP Collector
+
+### 3.1 Place .atKeys file
 
 ```bash
-cd shared
-dart pub get
-cd ..
+mkdir -p snmp_collector/.atsign
+cp ~/Downloads/@snmp_collector_key.atKeys snmp_collector/.atsign/
+# or place the file at ~/.atsign/keys/@snmp_collector_key.atKeys
 ```
 
-## Step 2: Set Up SNMP Collector
-
-### 2.1 Install Dependencies
+### 3.2 Run
 
 ```bash
 cd snmp_collector
-dart pub get
+dart run bin/snmp_collector.dart \
+  --atsign   @snmp_collector \
+  --keys     .atsign/@snmp_collector_key.atKeys \
+  --host     192.168.1.100 \   # transmitter IP; omit to use simulated data
+  --port     161 \
+  --community public \
+  --interval 5                 # seconds between polls
 ```
 
-### 2.2 Configure @sign Keys
+### 3.3 Verify
 
-1. Create the keys directory:
-   ```powershell
-   New-Item -ItemType Directory -Force -Path .atsign
-   ```
+Logs should show:
 
-2. Copy your @snmp_collector .atKeys file:
-   ```powershell
-   # Copy your downloaded .atKeys file to .atsign folder
-   Copy-Item "C:\Path\To\Downloaded\@snmp_collector_key.atKeys" .atsign\
-   ```
+```
+INFO: Authenticated as @snmp_collector
+INFO: AtCollection initialised (stats.kryz, TTL 7d)
+INFO: Appended reading: KRYZ-TX-001 @ 2026-05-10T12:00:00.000Z
+```
 
-### 2.3 Configure Environment (Optional)
+---
+
+## Step 4: Mobile App
+
+### 4.1 Run
 
 ```bash
-# Copy the example environment file
-Copy-Item .env.example .env
-
-# Edit .env with your settings
-notepad .env
+cd mobile_app
+flutter run              # or flutter run -d <device-id>
 ```
 
-### 2.4 Run the Collector
+### 4.2 First-time onboarding
+
+1. Tap **Get Started**
+2. Select or enter your receiver @sign (e.g. `@bob`)
+3. Authenticate — the app loads your `.atKeys` from the device secure store
+4. The dashboard opens automatically; gauges update as readings arrive
+
+### 4.3 Historical charts
+
+Tap the bar-chart icon (top-right of the dashboard) to open the **Metrics** screen.  
+Select a time window (1 h / 6 h / 24 h / 7 d) and view `SfCartesianChart` plots for all 6 metrics.
+
+### 4.4 Production build
 
 ```bash
-# Basic run with simulated SNMP data
-dart run bin\snmp_collector.dart `
-  --atsign @snmp_collector `
-  --keys .atsign\@snmp_collector_key.atKeys
+# Android
+flutter build apk --release
+# -> build/app/outputs/flutter-apk/app-release.apk
 
-# With real SNMP device
-dart run bin\snmp_collector.dart `
-  --atsign @snmp_collector `
-  --keys .atsign\@snmp_collector_key.atKeys `
-  --host 192.168.1.100 `
-  --port 161 `
-  --community public `
-  --interval 5
+# iOS (sign in Xcode after)
+flutter build ios --release
+
+# macOS
+flutter build macos --release
 ```
 
-## Step 3: Set Up Mobile Application
+---
 
-### 3.1 Install Dependencies
+## Step 5: Web Dashboard
+
+The web dashboard is a Dart shelf server — `at_client` has no Flutter web support (platform keychain plugins have no web implementation), so the server authenticates with the atPlatform and forwards live data to any browser over WebSocket.
+
+### 5.1 Place .atKeys file
 
 ```bash
-cd ..\mobile_app
-flutter pub get
+# Use the same receiver @sign as the mobile app, or a dedicated one
+mkdir -p web_dashboard/.atsign
+cp ~/Downloads/@bob_key.atKeys web_dashboard/.atsign/
 ```
 
-### 3.2 Configure Authorized Receivers
-
-Edit `shared\lib\config\atsign_config.dart` and ensure your @sign is in the authorized list:
-
-```dart
-static const List<String> authorizedReceivers = [
-  '@kryz_mobile',
-  '@bob',  // Add your @sign here
-];
-```
-
-### 3.3 Run the Mobile App
-
-#### On Emulator/Simulator
+### 5.2 Run
 
 ```bash
-# List available devices
-flutter devices
-
-# Run on specific device
-flutter run -d <device-id>
-
-# Or just run on default device
-flutter run
+cd web_dashboard
+dart run bin/server.dart \
+  --atsign @bob \
+  --keys   .atsign/@bob_key.atKeys \
+  --port   8080
 ```
 
-#### On Physical Device
+Then open **http://localhost:8080** in any browser.
 
-1. Connect your device via USB
-2. Enable developer mode on the device
-3. Run: `flutter run`
-
-### 3.4 First-Time App Setup
-
-1. Launch the app
-2. Tap "Get Started"
-3. Select or add your @sign
-4. Authenticate with your credentials
-5. The app will start receiving notifications automatically
-
-## Step 4: Testing the System
-
-### 4.1 Verify Collector is Running
-
-You should see logs like:
-
-```
-INFO: 2026-01-06 12:34:56: Starting SNMP collection (polling every 5s)
-INFO: 2026-01-06 12:34:56: Collected: TransmitterStats(id: KRYZ-TX-001, power: 4800.0W, ...)
-FINE: 2026-01-06 12:34:56: Notifications sent successfully
-```
-
-### 4.2 Verify Mobile App Receives Data
-
-The mobile app should:
-- Show the transmitter ID and status
-- Display gauges with current values
-- Update every 5 seconds (or your configured interval)
-
-### 4.3 Test Alert Notifications
-
-To trigger an alert, modify the simulated data in `snmp_collector\lib\services\snmp_service.dart`:
-
-```dart
-temperature: 92.0,  // Above critical threshold (90°C)
-```
-
-Restart the collector and watch for alert dialogs in the mobile app.
-
-## Step 5: Production Deployment
-
-### 5.1 SNMP Collector as a Service
-
-#### Windows Service
-
-```powershell
-# Create a batch file to run the collector
-# Then use NSSM or Windows Task Scheduler to run it as a service
-```
-
-#### Linux Service
-
-```bash
-# Create systemd service file
-sudo nano /etc/systemd/system/kryz-collector.service
-```
+### 5.3 Run as a systemd service (Linux)
 
 ```ini
+# /etc/systemd/system/kryz-dashboard.service
+[Unit]
+Description=KRYZ Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/kryzapp/web_dashboard
+ExecStart=/usr/bin/dart run bin/server.dart \
+  --atsign @bob \
+  --keys .atsign/@bob_key.atKeys
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable kryz-dashboard
+sudo systemctl start kryz-dashboard
+```
+
+---
+
+## Step 6: Run SNMP Collector as a service (Linux)
+
+```ini
+# /etc/systemd/system/kryz-collector.service
 [Unit]
 Description=KRYZ SNMP Collector
 After=network.target
@@ -200,8 +193,11 @@ After=network.target
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/path/to/snmp_collector
-ExecStart=/usr/bin/dart run bin/snmp_collector.dart --atsign @snmp_collector --keys .atsign/@snmp_collector_key.atKeys
+WorkingDirectory=/path/to/kryzapp/snmp_collector
+ExecStart=/usr/bin/dart run bin/snmp_collector.dart \
+  --atsign @snmp_collector \
+  --keys .atsign/@snmp_collector_key.atKeys \
+  --host 192.168.1.100
 Restart=always
 
 [Install]
@@ -213,112 +209,58 @@ sudo systemctl enable kryz-collector
 sudo systemctl start kryz-collector
 ```
 
-### 5.2 Mobile App Production Build
-
-#### Android
-
-```bash
-flutter build apk --release
-# APK will be in: build\app\outputs\flutter-apk\app-release.apk
-```
-
-#### iOS
-
-```bash
-flutter build ios --release
-# Then open in Xcode for final signing and deployment
-```
+---
 
 ## Troubleshooting
 
-### Collector Issues
-
-**Problem**: Authentication failed
-**Solution**: 
-- Verify .atKeys file path is correct
-- Ensure @sign has been activated
+### Collector: "Authentication failed"
+- Verify `.atKeys` file path is correct
+- Ensure the @sign has been activated at https://my.atsign.com
 - Check internet connectivity
 
-**Problem**: SNMP timeout
-**Solution**:
-- Verify transmitter IP address
-- Check firewall rules
-- Ensure SNMP community string is correct
-- The system will use simulated data if SNMP fails
+### Collector: "SNMP timeout"
+- Verify the transmitter IP (`--host`)
+- Check firewall rules allow UDP port 161
+- Verify the SNMP community string (`--community`)
+- The collector falls back to simulated data automatically
 
-### Mobile App Issues
+### Mobile app: no data after onboarding
+1. Confirm the collector is running and logging "Appended reading"
+2. Confirm your @sign is in `KryzAtSigns.authorizedReceivers`
+3. Check `at_service.dart` — `_collectionSub` must be active
 
-**Problem**: Not receiving notifications
-**Solution**:
-- Ensure collector is running
-- Verify @sign is in authorized receivers list
-- Check app has network permission
-- Restart the app
+### Web dashboard: browser shows no charts
+1. Server log must show "Dashboard running at http://…"
+2. Open browser devtools → Network → WS — should see a `/ws` WebSocket
+3. Ensure the server @sign is in `KryzAtSigns.authorizedReceivers`
 
-**Problem**: Onboarding fails
-**Solution**:
-- Check internet connectivity
-- Verify @sign credentials
-- Try clearing app data and re-onboarding
+---
 
-## Customization
+## Customisation
 
-### Adding More Receivers
-
-Edit `shared\lib\config\atsign_config.dart`:
-
-```dart
-static const List<String> authorizedReceivers = [
-  '@kryz_mobile',
-  '@bob',
-  '@alice',  // Add new receiver
-  '@charlie',  // Add another receiver
-];
-```
-
-### Adjusting Alert Thresholds
-
-Edit `shared\lib\models\transmitter_stats.dart`:
-
-```dart
-bool get isHealthy {
-  return status == 'ON_AIR' &&
-      temperature < 80.0 &&  // Adjust threshold
-      vswr < 2.0 &&          // Adjust threshold
-      powerOutput > 0;
-}
-```
-
-### Changing Poll Interval
-
-When running the collector:
-
+### Change poll interval
 ```bash
-dart run bin\snmp_collector.dart ... --interval 10  # Poll every 10 seconds
+dart run bin/snmp_collector.dart ... --interval 10
 ```
 
-### Customizing SNMP OIDs
+### Add a receiver @sign
+`shared/lib/config/atsign_config.dart` → add to `authorizedReceivers`.
 
-Edit `snmp_collector\lib\services\snmp_service.dart`:
+### Adjust alert thresholds
+`shared/lib/models/transmitter_stats.dart` → `alertLevel` getter.
 
-```dart
-static const String oidPowerOutput = '1.3.6.1.4.1.YOUR.MIB.HERE';
+### Change web dashboard port
+```bash
+dart run bin/server.dart ... --port 9090
 ```
+
+---
 
 ## Support
 
-For atPlatform specific questions:
-- Documentation: https://docs.atsign.com
-- GitHub: https://github.com/atsign-foundation
-- Discord: https://discord.atsign.com
-
-## Next Steps
-
-1. ✅ Set up and run the collector
-2. ✅ Set up and run the mobile app
-3. ✅ Test the complete flow
-4. 📝 Customize for your specific transmitter
-5. 📝 Deploy to production
-6. 📝 Monitor and maintain
-
-Congratulations! Your KRYZ transmitter monitoring system is now running on the atPlatform! 🎉
+| Resource | URL |
+|----------|-----|
+| atPlatform docs | https://docs.atsign.com |
+| Get @signs | https://atsign.com |
+| at_client pub.dev | https://pub.dev/packages/at_client |
+| Discord | https://discord.atsign.com |

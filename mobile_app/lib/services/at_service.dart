@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:at_client_flutter/at_client_flutter.dart';
+import 'package:at_client/at_client.dart' show AtCollection;
 import 'package:at_auth/at_auth.dart';
 import 'package:logging/logging.dart';
 import 'package:kryz_shared/kryz_shared.dart';
@@ -13,17 +14,25 @@ class AtService extends ChangeNotifier {
   String? _currentAtSign;
   bool _isInitialized = false;
   bool _isDisposed = false;
-  bool _isProcessingNotification = false;
-  StreamSubscription? _notificationSubscription;
-  DateTime? _subscriptionStartTime; // Track when we started subscribing
 
-  // Callback for received stats
+  // Collection for persisted stats (replaces the old notification-based stats feed)
+  AtCollection<TransmitterStats>? _statsCollection;
+  StreamSubscription? _collectionSub;
+
+  // Alert notifications remain on the notification service for immediate delivery
+  StreamSubscription? _alertSubscription;
+
+  // Callbacks wired up by DashboardScreen
   Function(TransmitterStats)? onStatsReceived;
   Function(Map<String, dynamic>)? onAlertReceived;
+  Function(AtCollection<TransmitterStats>)? onCollectionReady;
 
   bool get isInitialized => _isInitialized;
   String? get currentAtSign => _currentAtSign;
   AtClient? get atClient => _atClient;
+
+  /// Exposed so that [TransmitterProvider] can run historical queries.
+  AtCollection<TransmitterStats>? get statsCollection => _statsCollection;
 
   /// Initialize the service after successful authentication
   /// This should be called after PkamDialog.show() succeeds with AtClientPreference
@@ -58,8 +67,8 @@ class AtService extends ChangeNotifier {
 
       logger.info('AtClient initialized successfully for $_currentAtSign');
 
-      // Start listening for notifications
-      _subscribeToNotifications();
+      // Open the collection and start listening for new readings + alerts
+      await _subscribeToCollection();
 
       notifyListeners();
     } catch (e, stackTrace) {
@@ -74,185 +83,121 @@ class AtService extends ChangeNotifier {
     _isInitialized = false;
     _currentAtSign = null;
     _atClient = null;
+    _statsCollection = null;
 
-    // Cancel notification subscription
-    _notificationSubscription?.cancel();
-    _notificationSubscription = null;
+    _collectionSub?.cancel();
+    _collectionSub = null;
+
+    _alertSubscription?.cancel();
+    _alertSubscription = null;
 
     notifyListeners();
   }
 
-  /// Subscribe to incoming notifications
-  ///
-  /// This subscription remains open throughout the app lifecycle, including
-  /// during data timeouts. This enables automatic recovery when the data
-  /// stream resumes - the UI will automatically switch from the red timeout
-  /// banner back to the green status card.
-  void _subscribeToNotifications() {
+  /// Open the [AtCollection<TransmitterStats>] and subscribe to:
+  ///   1. New readings  → via [collection.updates] (replaces old notify-based stats)
+  ///   2. Alert events  → still via [notificationService] for immediate delivery
+  Future<void> _subscribeToCollection() async {
     if (_atClient == null || _isDisposed) {
-      logger.warning(
-          'Cannot subscribe: ${_atClient == null ? "atClient is null" : "service is disposed"}');
+      logger
+          .warning('Cannot subscribe: atClient is null or service is disposed');
       return;
     }
 
-    logger.info('Subscribing to notifications (current data only)');
-
-    // Mark the time we start subscribing - only accept notifications after this point
-    _subscriptionStartTime = DateTime.now();
-    logger.info(
-        'Will only accept notifications newer than: $_subscriptionStartTime');
+    logger.info('Opening AtCollection<TransmitterStats> (stats.kryz)');
 
     try {
-      // Subscribe to notifications - fetchOfflineNotifications=false ensures only new data
-      _notificationSubscription = _atClient!.notificationService
+      _statsCollection = await _atClient!.collection<TransmitterStats>(
+        'stats.kryz',
+        const Duration(days: 7),
+        fromJson: TransmitterStats.fromJson,
+        typeTag: 'TransmitterStats',
+      );
+
+      logger.info('Collection opened — subscribing to updates stream');
+
+      // Listen for new / updated readings written by the collector.
+      // CItemUpdated carries (owner, id) only — fetch the item to get the obj.
+      _collectionSub = _statsCollection!.updates.listen(
+        (event) async {
+          if (_isDisposed) return;
+          try {
+            final citem =
+                await _statsCollection!.getOrNull(event.id, event.owner);
+            if (citem == null) return;
+            final stats = citem.obj;
+            logger.info('Collection update: ${stats.transmitterId} '
+                'powerOut=${stats.powerOut}W @ ${stats.timestamp}');
+            onStatsReceived?.call(stats);
+          } catch (e, st) {
+            logger.severe('Error processing collection event', e, st);
+          }
+        },
+        onError: (error, st) {
+          logger.severe('Collection updates stream error', error, st);
+        },
+        cancelOnError: false,
+      );
+
+      // Notify the dashboard so it can pass the collection to TransmitterProvider
+      if (_statsCollection != null) {
+        onCollectionReady?.call(_statsCollection!);
+      }
+
+      // Alert notifications still travel via the notification service so the
+      // mobile UI can pop up a modal immediately, without waiting for sync.
+      _alertSubscription = _atClient!.notificationService
           .subscribe(
-        regex: '.*kryz',
+        regex: '.*${NotificationKeys.alertNotification}.*kryz',
         shouldDecrypt: true,
       )
-          .handleError((error, stackTrace) {
-        // Catch errors from the stream itself (e.g., during decryption)
-        if (error.toString().contains('FileSystemException') ||
-            error.toString().contains('File closed') ||
-            error.toString().contains('exception in get')) {
-          logger.warning(
-              'File system error in notification decryption (database may be unavailable): $error');
-          // Don't rethrow - just log and continue, keeping subscription alive
-        } else {
-          logger.severe('Unexpected error in notification stream: $error',
-              error, stackTrace);
-        }
+          .handleError((error) {
+        logger.warning('Alert subscription error: $error');
       }).listen(
         (notification) {
-          // Double-check not disposed before processing
-          if (_isDisposed) {
-            logger.fine(
-                'Notification received but service is disposed, ignoring');
-            return;
-          }
-
-          try {
-            _handleNotification(notification);
-          } catch (e, stackTrace) {
-            // Catch any errors during notification handling to prevent stream closure
-            if (e.toString().contains('FileSystemException') ||
-                e.toString().contains('File closed')) {
-              logger.warning(
-                  'File system error during notification handling (app may be shutting down): $e');
-            } else {
-              logger.severe('Error handling notification: $e', e, stackTrace);
-            }
-          }
+          if (_isDisposed) return;
+          _handleAlertNotification(notification);
         },
-        onError: (error, stackTrace) {
-          // Handle stream errors gracefully
-          if (error.toString().contains('FileSystemException') ||
-              error.toString().contains('File closed') ||
-              error.toString().contains('exception in get')) {
-            logger.warning(
-                'File system error in notification stream (likely app shutdown or database issue): $error');
-          } else {
-            logger.severe(
-                'Notification stream error: $error', error, stackTrace);
-          }
-        },
-        cancelOnError: false, // Keep subscription alive despite errors
+        cancelOnError: false,
       );
-    } catch (e, stackTrace) {
-      logger.severe(
-          'Failed to create notification subscription: $e', e, stackTrace);
+
+      logger.info('Collection + alert subscriptions active');
+    } catch (e, st) {
+      logger.severe('Failed to open collection or subscribe', e, st);
     }
   }
 
-  /// Handle incoming notification
-  void _handleNotification(AtNotification notification) {
-    // Ignore notifications if service is disposed or already processing
-    if (_isDisposed) {
-      logger.fine('Ignoring notification after disposal');
-      return;
-    }
-
-    // Filter out old notifications - only accept notifications created after subscription started
-    if (_subscriptionStartTime != null) {
-      final notificationTime =
-          DateTime.fromMillisecondsSinceEpoch(notification.epochMillis);
-      if (notificationTime.isBefore(_subscriptionStartTime!)) {
-        logger.info(
-            'Ignoring old notification from $notificationTime (before subscription at $_subscriptionStartTime)');
-        return;
-      }
-    }
-
-    if (_isProcessingNotification) {
-      logger.fine('Already processing a notification, skipping this one');
-      // Skip concurrent notifications to avoid database contention
-      return;
-    }
-
-    _isProcessingNotification = true;
-
+  /// Handle incoming alert notifications (stats travel via collection instead).
+  void _handleAlertNotification(AtNotification notification) {
     try {
-      logger.info('Received notification: ${notification.key}');
-      logger.fine(
-          'Notification details - key: ${notification.key}, value: ${notification.value}, from: ${notification.from}');
+      final value = notification.value;
+      if (value == null || value.isEmpty) return;
 
-      final key = notification.key;
-      var value = notification.value;
-
-      if (value == null || value.isEmpty) {
-        logger.warning('Notification value is null or empty');
+      if (!value.startsWith('{')) {
+        logger
+            .warning('Alert notification value appears un-decrypted, skipping');
         return;
       }
 
-      // Check if this looks like encrypted data that failed to decrypt
-      if (value.length > 100 && !value.startsWith('{')) {
-        logger.warning(
-            'Received encrypted notification - decryption may have failed due to database issue');
-        logger.warning(
-            'This can happen after timeout when database is temporarily unavailable');
-        return;
-      }
-
-      // The atPlatform handles encryption/decryption automatically
-      // We should receive plain JSON here
-      if (key.contains(NotificationKeys.transmitterStats)) {
-        // Parse transmitter stats
-        final Map<String, dynamic> jsonData = jsonDecode(value);
-        final stats = TransmitterStats.fromJson(jsonData);
-
-        logger.info('Received stats: $stats');
-        onStatsReceived?.call(stats);
-      } else if (key.contains(NotificationKeys.alertNotification)) {
-        // Parse alert
-        final Map<String, dynamic> alertData = jsonDecode(value);
-
-        logger.warning('Received alert: $alertData');
-        onAlertReceived?.call(alertData);
-      }
-    } catch (e, stackTrace) {
-      if (e.toString().contains('FileSystemException') ||
-          e.toString().contains('File closed')) {
-        logger.warning(
-            'File system error handling notification (database may be closing): $e');
-      } else if (e is FormatException) {
-        logger.warning(
-            'Failed to parse notification JSON - may be encrypted data: $e');
-      } else {
-        logger.severe('Failed to handle notification: $e', e, stackTrace);
-      }
-    } finally {
-      _isProcessingNotification = false;
+      final alertData = jsonDecode(value) as Map<String, dynamic>;
+      logger.warning('Received alert: $alertData');
+      onAlertReceived?.call(alertData);
+    } catch (e, st) {
+      logger.severe('Failed to parse alert notification', e, st);
     }
   }
 
   /// Cleanup
   @override
   void dispose() {
-    logger.info('Disposing AtService - cancelling notification subscription');
+    logger.info('Disposing AtService');
     _isDisposed = true;
 
-    // Cancel subscription IMMEDIATELY to prevent processing notifications during shutdown
-    _notificationSubscription?.cancel();
-    _notificationSubscription = null;
+    _collectionSub?.cancel();
+    _collectionSub = null;
+
+    _alertSubscription?.cancel();
+    _alertSubscription = null;
 
     super.dispose();
   }

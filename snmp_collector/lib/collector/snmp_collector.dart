@@ -4,6 +4,7 @@ import 'package:logging/logging.dart';
 import 'package:at_client/at_client.dart';
 import 'package:at_onboarding_cli/at_onboarding_cli.dart' as cli;
 import '../services/snmp_service.dart';
+import '../services/at_collection_service.dart';
 import '../services/at_notification_service.dart';
 
 final logger = Logger('SNMPCollector');
@@ -19,7 +20,12 @@ class SNMPCollector {
 
   late AtClient atClient;
   late SNMPService snmpService;
-  late AtNotificationService notificationService;
+
+  /// Writes every reading to the atCollection (persisted, end-to-end encrypted).
+  late AtCollectionService collectionService;
+
+  /// Sends urgent alert notifications (separate from the stats collection).
+  late AtNotificationService alertService;
 
   Timer? _pollTimer;
   bool _isRunning = false;
@@ -67,9 +73,22 @@ class SNMPCollector {
     // Get the authenticated atClient
     atClient = AtClientManager.getInstance().atClient;
 
-    logger.info('atClient initialized and authenticated successfully');
+    logger.info('atClient initialised and authenticated successfully');
 
-    // Initialize SNMP service
+    // Convert receiver strings → Atsign objects for the collection API
+    final receiverAtsigns = receivers.map((r) => r.toAtsign()).toSet();
+
+    // Initialise collection service (stats are persisted here, not notified)
+    collectionService = AtCollectionService(
+      atClient: atClient,
+      receivers: receiverAtsigns,
+    );
+    await collectionService.initialize();
+
+    // Initialise alert service (urgent alerts still use notification API)
+    alertService = AtNotificationService(atClient: atClient);
+
+    // Initialise SNMP service
     snmpService = SNMPService(
       host: transmitterHost,
       port: transmitterPort,
@@ -77,37 +96,34 @@ class SNMPCollector {
       useSimulatedData: useSimulatedData,
     );
 
-    // Initialize SNMP session if using real data
     if (!useSimulatedData) {
       await snmpService.initialize();
-      logger.info('SNMP session initialized for real data collection');
+      logger.info('SNMP session initialised for real data collection');
     } else {
       logger.info('Using simulated SNMP data');
     }
 
-    // Initialize notification service
-    notificationService = AtNotificationService(atClient: atClient);
-
-    logger.info('Initialization complete');
+    logger.info('Initialisation complete');
   }
 
-  /// Start collecting and sending notifications
+  /// Start collecting and writing to the atCollection
   Future<void> start() async {
     if (_isRunning) {
       logger.warning('Collector is already running');
       return;
     }
 
-    logger.info('Starting SNMP collection (polling every ${pollIntervalSeconds}s)');
+    logger.info(
+        'Starting SNMP collection (polling every ${pollIntervalSeconds}s)');
     _isRunning = true;
 
     // Initial collection
-    await _collectAndNotify();
+    await _collectAndPersist();
 
     // Set up periodic polling
     _pollTimer = Timer.periodic(
       Duration(seconds: pollIntervalSeconds),
-      (_) => _collectAndNotify(),
+      (_) => _collectAndPersist(),
     );
   }
 
@@ -119,30 +135,30 @@ class SNMPCollector {
     _isRunning = false;
   }
 
-  /// Collect SNMP data and send notifications
-  Future<void> _collectAndNotify() async {
+  /// Collect SNMP data, persist to collection, and send alert notification if needed.
+  Future<void> _collectAndPersist() async {
     try {
       logger.fine('Collecting transmitter stats');
 
-      // Collect stats from transmitter via SNMP
       final stats = await snmpService.collectStats();
 
       logger.info('Collected: $stats');
 
-      // Check for alerts
+      // Write reading to AtCollection — this is the primary data path.
+      // The SDK handles encryption, sync, and delivery to all receivers.
+      await collectionService.appendReading(stats);
+
+      // If an alert condition exists, also send an urgent notification so
+      // the mobile app can display an immediate modal without waiting for sync.
       if (stats.alertLevel != null) {
-        logger.warning('Alert detected: ${stats.alertLevel} - $stats');
+        logger.warning(
+            'Alert detected: ${stats.alertLevel} — sending notification');
+        await alertService.sendAlert(stats, receivers);
       }
 
-      // Send notifications to authorized receivers
-      await notificationService.sendTransmitterStats(
-        stats,
-        receivers,
-      );
-
-      logger.fine('Notifications sent successfully');
+      logger.fine('Reading persisted successfully');
     } catch (e, stackTrace) {
-      logger.severe('Error collecting/sending data', e, stackTrace);
+      logger.severe('Error collecting/persisting data', e, stackTrace);
     }
   }
 
