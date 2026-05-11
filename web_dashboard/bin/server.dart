@@ -57,8 +57,8 @@ Future<void> _pushHistoryAll(int secs) async {
         .get();
     final readings = items.map((i) => i.obj.toJson()).toList();
     _broadcast({'type': 'history', 'data': readings});
-    _log.fine(
-        'Pushed ${readings.length} history readings to ${_clients.length} client(s)');
+    _log.info('History push: ${readings.length} readings (${secs}s window) '
+        'to ${_clients.length} client(s)');
   } catch (e) {
     _log.warning('_pushHistoryAll error: $e');
   }
@@ -172,6 +172,21 @@ void main(List<String> arguments) async {
   );
   _log.info('Collection opened (stats.kryz)');
   _statsCollection = collection;
+
+  // Diagnostic: count how many items are already in the local store.
+  // If this is 0 after a known-populated run, the local Hive store is empty
+  // and we are waiting for sync to deliver historical data.
+  try {
+    final existingItems = await collection
+        .query()
+        .where((item) => item.obj.timestamp
+            .isAfter(DateTime.now().subtract(const Duration(days: 7))))
+        .get();
+    _log.info(
+        'Local store on startup: ${existingItems.length} readings in last 7 days');
+  } catch (e) {
+    _log.warning('Startup count query failed: $e');
+  }
 
   // Stream new readings to all connected WebSocket clients.
   // CItemUpdated carries only (owner, id) — fetch the item to get the domain obj.

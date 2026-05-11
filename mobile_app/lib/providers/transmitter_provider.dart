@@ -36,17 +36,21 @@ class TransmitterProvider extends ChangeNotifier {
 
   /// Live stream of readings within [window] from now, sorted oldest→newest.
   ///
-  /// Uses the [AtCollection] query engine which performs incremental delta
-  /// maintenance — each new collector reading triggers a single-item update,
-  /// not a full re-scan.  Returns an empty stream if no collection is set yet.
-  Stream<List<CItem<TransmitterStats>>> historyStream(Duration window) {
-    if (_collection == null) return const Stream.empty();
+  /// Emits the current local-store snapshot immediately (via [get]) so charts
+  /// are populated right away, even if [watch] doesn't fire until the next
+  /// change.  Subsequent emissions come from [watch] whenever the query result
+  /// set changes (e.g., as sync delivers historical items).
+  Stream<List<CItem<TransmitterStats>>> historyStream(Duration window) async* {
+    if (_collection == null) return;
     final cutoff = DateTime.now().subtract(window);
-    return _collection!
+    final q = _collection!
         .query()
         .where((item) => item.obj.timestamp.isAfter(cutoff))
-        .orderBy((item) => item.obj.timestamp)
-        .watch();
+        .orderBy((item) => item.obj.timestamp);
+    // Emit current snapshot immediately.
+    yield await q.get();
+    // Then forward every future change.
+    yield* q.watch();
   }
 
   /// One-shot snapshot of readings within [window] from now, sorted oldest→newest.
