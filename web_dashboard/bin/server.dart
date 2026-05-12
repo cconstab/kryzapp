@@ -90,8 +90,8 @@ Future<void> _loadHistoryCached() async {
         if (val.value != null) {
           final env = jsonDecode(val.value as String) as Map<String, dynamic>;
           if (env['type'] == 'TransmitterStats') {
-            final stats = TransmitterStats.fromJson(
-                env['obj'] as Map<String, dynamic>);
+            final stats =
+                TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
             if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
           }
         }
@@ -172,7 +172,8 @@ Future<void> _pollNewKeys() async {
             TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
         if (!stats.timestamp.isAfter(cutoff7d)) continue;
         if (_cacheAdd(stats) && _clients.isNotEmpty) {
-          _log.fine('Poll new key: ${stats.transmitterId} @ ${stats.timestamp}');
+          _log.fine(
+              'Poll new key: ${stats.transmitterId} @ ${stats.timestamp}');
           _broadcast({'type': 'reading', 'data': stats.toJson()});
         }
       } catch (_) {}

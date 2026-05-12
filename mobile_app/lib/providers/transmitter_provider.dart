@@ -81,14 +81,16 @@ class TransmitterProvider extends ChangeNotifier {
           if (val.value != null) {
             final env = jsonDecode(val.value as String) as Map<String, dynamic>;
             if (env['type'] == 'TransmitterStats') {
-              final stats = TransmitterStats.fromJson(
-                  env['obj'] as Map<String, dynamic>);
+              final stats =
+                  TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
               if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
             }
           }
         } catch (_) {}
         // Yield every 10 keys: forces a macrotask boundary so live events fire.
-        if (i % 10 == 9) { await Future.delayed(Duration.zero); }
+        if (i % 10 == 9) {
+          await Future.delayed(Duration.zero);
+        }
       }
       await Future.delayed(Duration.zero); // final yield
 
