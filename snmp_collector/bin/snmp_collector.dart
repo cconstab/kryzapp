@@ -20,8 +20,13 @@ void main(List<String> arguments) async {
   // Parse early so -v takes effect before any logging.
   // Re-parsed below inside the try block for full validation.
   final earlyArgs = parser.parse(arguments);
-  Logger.root.level = (earlyArgs['verbose'] as bool) ? Level.FINE : Level.SEVERE;
+  final verbose = earlyArgs['verbose'] as bool;
+  // Keep root level at ALL so every logger can emit; filter in the listener.
+  // Setting Level.SEVERE on root is overridden by the SDK during init.
+  Logger.root.level = Level.ALL;
   Logger.root.onRecord.listen((record) {
+    final minLevel = verbose ? Level.FINE : Level.SEVERE;
+    if (record.level < minLevel) return;
     print('${record.level.name}: ${record.time}: ${record.message}');
   });
 
