@@ -56,11 +56,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     // Wire up the collection so TransmitterProvider can answer historical queries
     atService.onCollectionReady = (collection) {
-      transmitterProvider.setCollection(collection);
+      if (atService.atClient != null) {
+        transmitterProvider.setCollection(collection, atService.atClient!);
+      }
     };
     // Collection may already be ready if auth happened before the screen mounted
-    if (atService.statsCollection != null) {
-      transmitterProvider.setCollection(atService.statsCollection!);
+    if (atService.statsCollection != null && atService.atClient != null) {
+      transmitterProvider.setCollection(
+          atService.statsCollection!, atService.atClient!);
     }
 
     atService.onAlertReceived = (alert) {

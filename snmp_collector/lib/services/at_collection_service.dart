@@ -35,11 +35,14 @@ class AtCollectionService {
         '(namespace: stats.kryz, TTL: ${retentionDays}d, '
         'receivers: ${receivers.map((a) => a.toString()).join(", ")})');
 
+    atClient.notificationService.startListening();
+
     _collection = await atClient.collection<TransmitterStats>(
       'stats.kryz',
       Duration(days: retentionDays),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
+      eventSource: EventSource.data,
     );
 
     _logger.info('AtCollection initialised successfully');

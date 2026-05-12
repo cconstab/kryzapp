@@ -19,6 +19,117 @@ final _clients = <WebSocketChannel>{};
 Map<String, dynamic>? _lastSyncStatus;
 Map<String, dynamic>? _lastConfigPayload;
 
+// ── atClient reference — set once authenticated ───────────────────────────────
+AtClient? _atClient;
+
+// ── In-memory history cache ───────────────────────────────────────────────────
+// Sorted list of all stats accumulated since startup.
+// Live readings are added directly; historical data fills in via background load.
+final List<TransmitterStats> _historyCache = [];
+bool _historyCacheLoading = false;
+bool _cacheLoaded = false; // true after the initial full scan completes
+
+// Keys whose values have been loaded into _historyCache (toString() of AtKey).
+// Used by _pollNewKeys to find genuinely new keys without re-fetching old ones.
+final Set<String> _scannedKeys = {};
+
+/// Add a stats item to the in-memory cache (maintaining sort order).
+/// Returns true if the item was actually inserted, false if it was a duplicate.
+bool _cacheAdd(TransmitterStats stats) {
+  // Expire items older than 7 days
+  final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
+  _historyCache.removeWhere((s) => s.timestamp.isBefore(cutoff7d));
+  // Skip exact duplicates (same transmitter, same timestamp).
+  if (_historyCache.any((s) =>
+      s.timestamp == stats.timestamp && s.transmitterId == stats.transmitterId))
+    return false;
+  final idx =
+      _historyCache.indexWhere((s) => s.timestamp.isAfter(stats.timestamp));
+  if (idx == -1) {
+    _historyCache.add(stats);
+  } else {
+    _historyCache.insert(idx, stats);
+  }
+  return true;
+}
+
+/// Return the cache as a JSON list, filtered to the given cutoff.
+List<Map<String, dynamic>> _cacheSnapshot(DateTime cutoff) => _historyCache
+    .where((s) => s.timestamp.isAfter(cutoff))
+    .map((s) => s.toJson())
+    .toList();
+
+/// Load all historical stats from the local Hive store into [_historyCache].
+///
+/// Collects all items into a local list first (no per-item cache mutations
+/// during the scan), then sorts + deduplicates + merges once at the end.
+/// Broadcasts at most once every 5 seconds during the scan so charts start
+/// filling quickly without flooding clients.
+///
+/// Protected by [_cacheLoaded]: once the initial scan completes this is a
+/// no-op, preventing runaway re-scans from the periodic timer.
+Future<void> _loadHistoryCached() async {
+  if (_atClient == null || _historyCacheLoading || _cacheLoaded) return;
+  _historyCacheLoading = true;
+  try {
+    final sw = Stopwatch()..start();
+    final keys = await _atClient!.getAtKeys(regex: r'stats\.kryz@');
+    _log.info(
+        'History scan: ${keys.length} stats keys found in ${sw.elapsedMilliseconds}ms');
+    final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
+    final incoming = <TransmitterStats>[];
+
+    // Read keys one at a time and yield every 10 so the Dart macrotask event
+    // queue (collection.updates callbacks, WS sends) runs between groups.
+    // Future.wait(N) drains all completions as microtasks before ANY event
+    // queue item runs — which silences live reading events for ~600 ms/batch.
+    for (var i = 0; i < keys.length; i++) {
+      _scannedKeys.add(keys[i].toString()); // record before fetching
+      try {
+        final val = await _atClient!.get(keys[i]);
+        if (val.value != null) {
+          final env = jsonDecode(val.value as String) as Map<String, dynamic>;
+          if (env['type'] == 'TransmitterStats') {
+            final stats = TransmitterStats.fromJson(
+                env['obj'] as Map<String, dynamic>);
+            if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
+          }
+        }
+      } catch (_) {}
+      // Yield every 10 keys: forces a macrotask boundary so live events fire.
+      if (i % 10 == 9) await Future.delayed(Duration.zero);
+    }
+    await Future.delayed(Duration.zero); // final yield
+
+    // Final merge: sort + deduplicate incoming against live readings in cache.
+    incoming.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final seen = <String>{};
+    final merged = <TransmitterStats>[];
+    for (final s in [..._historyCache, ...incoming]) {
+      if (!s.timestamp.isAfter(cutoff7d)) continue;
+      final key = '${s.transmitterId}|${s.timestamp.microsecondsSinceEpoch}';
+      if (seen.add(key)) merged.add(s);
+    }
+    merged.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _historyCache
+      ..clear()
+      ..addAll(merged);
+
+    _cacheLoaded = true;
+    sw.stop();
+    _log.info(
+        'History scan complete: ${_historyCache.length} readings in ${sw.elapsedMilliseconds}ms');
+    // Single final broadcast with the complete, sorted dataset.
+    if (_clients.isNotEmpty) {
+      _broadcast({'type': 'history', 'data': _cacheSnapshot(cutoff7d)});
+    }
+  } catch (e) {
+    _log.warning('_loadHistoryCached error: $e');
+  } finally {
+    _historyCacheLoading = false;
+  }
+}
+
 /// Convert a [DashboardConfig] to the `{type:'config', data:{...}}` WS payload.
 Map<String, dynamic> _configPayload(DashboardConfig cfg) {
   return {
@@ -36,32 +147,59 @@ Map<String, dynamic> _configPayload(DashboardConfig cfg) {
   };
 }
 
+/// Incremental poll for keys that appeared after the initial full scan.
+///
+/// Runs every 30 s once [_cacheLoaded] is true.  [getAtKeys] is fast (local
+/// Hive list, no network).  Only the 1–2 NEW keys per poll need a `get()`,
+/// so this is essentially free compared with the initial scan.  This is the
+/// fallback that keeps realtime working even if [collection.updates] silently
+/// stops firing (notification WebSocket drop, at_client edge case, etc.).
+Future<void> _pollNewKeys() async {
+  if (!_cacheLoaded || _atClient == null) return;
+  try {
+    final allKeys = await _atClient!.getAtKeys(regex: r'stats\.kryz@');
+    final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
+    for (final k in allKeys) {
+      final ks = k.toString();
+      if (_scannedKeys.contains(ks)) continue;
+      _scannedKeys.add(ks); // claim before fetch so concurrent polls skip it
+      try {
+        final val = await _atClient!.get(k);
+        if (val.value == null) continue;
+        final env = jsonDecode(val.value as String) as Map<String, dynamic>;
+        if (env['type'] != 'TransmitterStats') continue;
+        final stats =
+            TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
+        if (!stats.timestamp.isAfter(cutoff7d)) continue;
+        if (_cacheAdd(stats) && _clients.isNotEmpty) {
+          _log.fine('Poll new key: ${stats.transmitterId} @ ${stats.timestamp}');
+          _broadcast({'type': 'reading', 'data': stats.toJson()});
+        }
+      } catch (_) {}
+    }
+  } catch (e) {
+    _log.warning('_pollNewKeys error: $e');
+  }
+}
+
 // ── History broadcast ────────────────────────────────────────────────────────
 // Tracked so we can detect out-of-order readings from sync.
 DateTime? _latestBroadcastTime;
 
-// Collection reference stored globally so sync events can push history.
-AtCollection<TransmitterStats>? _statsCollection;
-
-/// Push a fresh history batch (last [secs] seconds) to all WS clients.
-/// Called after each successful sync and on out-of-order readings so charts
-/// always show a monotone, sorted dataset.
+/// Push history to all connected clients (serves from cache; triggers a
+/// background cache load only if the initial scan hasn't run yet).
 Future<void> _pushHistoryAll(int secs) async {
-  if (_statsCollection == null || _clients.isEmpty) return;
-  try {
-    final cutoff = DateTime.now().subtract(Duration(seconds: secs));
-    final items = await _statsCollection!
-        .query()
-        .where((item) => item.obj.timestamp.isAfter(cutoff))
-        .orderBy((item) => item.obj.timestamp)
-        .get();
-    final readings = items.map((i) => i.obj.toJson()).toList();
+  if (_clients.isEmpty) return;
+  final cutoff = DateTime.now().subtract(Duration(seconds: secs));
+  final readings = _cacheSnapshot(cutoff);
+  if (readings.isNotEmpty) {
     _broadcast({'type': 'history', 'data': readings});
     _log.info('History push: ${readings.length} readings (${secs}s window) '
         'to ${_clients.length} client(s)');
-  } catch (e) {
-    _log.warning('_pushHistoryAll error: $e');
   }
+  // Trigger the initial load if it hasn't run yet (e.g. client connected
+  // before auth completed) — but never re-run once _cacheLoaded is set.
+  if (!_cacheLoaded && !_historyCacheLoading) _loadHistoryCached().ignore();
 }
 
 void _broadcast(Object message) {
@@ -107,111 +245,7 @@ void main(List<String> arguments) async {
   final bindHost = args['host'] as String;
   final port = int.parse(args['port'] as String);
 
-  // ── Authenticate ─────────────────────────────────────────────────────────
-  _log.info('Authenticating $atSign …');
-
-  final pref = cli.AtOnboardingPreference()
-    ..rootDomain = 'root.atsign.org'
-    ..namespace = 'kryz'
-    ..hiveStoragePath = '.atsign/storage/$atSign'
-    ..commitLogPath = '.atsign/storage/$atSign/commitLog'
-    ..atKeysFilePath = keysPath;
-
-  final onboarding = cli.AtOnboardingServiceImpl(atSign, pref);
-  if (!await onboarding.authenticate()) {
-    _log.severe('Authentication failed for $atSign');
-    exit(1);
-  }
-
-  final atClient = AtClientManager.getInstance().atClient;
-  _log.info('Authenticated as $atSign');
-
-  // ── Register sync progress listener ──────────────────────────────────────
-  atClient.syncService.addProgressListener(_SyncProgressBroadcaster());
-
-  // ── Load & watch DashboardConfig (thresholds) ───────────────────────────
-  Future<void> loadAndBroadcastConfig() async {
-    try {
-      final key = AtKey()
-        ..key = 'kryz_dashboard_config'
-        ..sharedWith = atSign;
-      final result = await atClient.get(key);
-      if (result.value != null) {
-        final cfg = DashboardConfig.fromJson(
-            jsonDecode(result.value as String) as Map<String, dynamic>);
-        _lastConfigPayload = _configPayload(cfg);
-        _log.info('DashboardConfig loaded from atProtocol');
-      } else {
-        // Fall back to shared defaults so the page still shows correct thresholds.
-        _lastConfigPayload = _configPayload(DashboardConfig.defaults());
-        _log.info('No stored config found — using defaults');
-      }
-    } catch (e) {
-      _lastConfigPayload = _configPayload(DashboardConfig.defaults());
-      _log.warning('Could not load DashboardConfig: $e — using defaults');
-    }
-    _broadcast(_lastConfigPayload!);
-  }
-
-  await loadAndBroadcastConfig();
-
-  // Re-broadcast whenever the config changes.
-  atClient.notificationService
-      .subscribe(regex: '.*kryz_dashboard_config.*', shouldDecrypt: true)
-      .listen((_) async {
-    _log.info('Config change notification received — reloading');
-    await loadAndBroadcastConfig();
-  });
-
-  // ── Open the collection ───────────────────────────────────────────────────
-  final collection = await atClient.collection<TransmitterStats>(
-    'stats.kryz',
-    const Duration(days: 7),
-    fromJson: TransmitterStats.fromJson,
-    typeTag: 'TransmitterStats',
-  );
-  _log.info('Collection opened (stats.kryz)');
-  _statsCollection = collection;
-
-  // Diagnostic: count how many items are already in the local store.
-  // If this is 0 after a known-populated run, the local Hive store is empty
-  // and we are waiting for sync to deliver historical data.
-  try {
-    final existingItems = await collection
-        .query()
-        .where((item) => item.obj.timestamp
-            .isAfter(DateTime.now().subtract(const Duration(days: 7))))
-        .get();
-    _log.info(
-        'Local store on startup: ${existingItems.length} readings in last 7 days');
-  } catch (e) {
-    _log.warning('Startup count query failed: $e');
-  }
-
-  // Stream new readings to all connected WebSocket clients.
-  // CItemUpdated carries only (owner, id) — fetch the item to get the domain obj.
-  collection.updates.listen((event) async {
-    final citem = await collection.getOrNull(event.id, event.owner);
-    if (citem == null) return;
-    final stats = citem.obj;
-    _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
-
-    // If this reading arrived out-of-order (older than the latest we've sent),
-    // it is a historical item arriving mid-sync.  Skip broadcasting it as a
-    // live reading — the periodic 30-second history push will include it in a
-    // correctly sorted snapshot.  Pushing a full history here was causing
-    // repeated partial-data snapshots during the initial sync.
-    if (_latestBroadcastTime != null &&
-        stats.timestamp.isBefore(_latestBroadcastTime!)) {
-      _log.fine(
-          'Skipping out-of-order reading (${stats.timestamp}); will appear in next history push');
-      return;
-    }
-    _latestBroadcastTime = stats.timestamp;
-    _broadcast({'type': 'reading', 'data': stats.toJson()});
-  });
-
-  // ── HTTP + WebSocket server ───────────────────────────────────────────────
+  // ── HTTP + WebSocket server — start immediately so browser can connect ────
   final router = Router()
     // Serve the static dashboard HTML
     ..get('/', _serveIndex)
@@ -220,15 +254,9 @@ void main(List<String> arguments) async {
     ..get('/history', (Request req) async {
       final windowSecs =
           int.tryParse(req.url.queryParameters['window'] ?? '') ?? 3600;
-      final items = await collection
-          .query()
-          .where((item) => item.obj.timestamp
-              .isAfter(DateTime.now().subtract(Duration(seconds: windowSecs))))
-          .orderBy((item) => item.obj.timestamp)
-          .get();
-      final readings = items.map((i) => i.obj.toJson()).toList();
+      final cutoff = DateTime.now().subtract(Duration(seconds: windowSecs));
       return Response.ok(
-        jsonEncode(readings),
+        jsonEncode(_cacheSnapshot(cutoff)),
         headers: {'content-type': 'application/json'},
       );
     })
@@ -246,27 +274,13 @@ void main(List<String> arguments) async {
         if (_lastConfigPayload != null) {
           ws.sink.add(jsonEncode(_lastConfigPayload));
         }
-        // Push current 7-day history DIRECTLY to this client (not broadcast)
-        // so it gets data immediately without waiting for a sync event.
-        // We send directly to ws.sink so this is not affected by other clients'
-        // currentWindow — the browser filters to its own selected window.
-        if (_statsCollection != null) {
-          () async {
-            try {
-              final cutoff = DateTime.now().subtract(const Duration(days: 7));
-              final items = await _statsCollection!
-                  .query()
-                  .where((item) => item.obj.timestamp.isAfter(cutoff))
-                  .orderBy((item) => item.obj.timestamp)
-                  .get();
-              final readings = items.map((i) => i.obj.toJson()).toList();
-              _log.info(
-                  'Sending ${readings.length} history items to new client');
-              ws.sink.add(jsonEncode({'type': 'history', 'data': readings}));
-            } catch (e) {
-              _log.warning('History push to new client failed: $e');
-            }
-          }();
+        // Send whatever is already in the cache immediately (fast).
+        // The background _loadHistoryCached() will broadcast more as it runs.
+        final cached =
+            _cacheSnapshot(DateTime.now().subtract(const Duration(days: 7)));
+        if (cached.isNotEmpty) {
+          ws.sink.add(jsonEncode({'type': 'history', 'data': cached}));
+          _log.info('Sent ${cached.length} cached history items to new client');
         }
 
         // When client requests historical data it sends:
@@ -277,14 +291,11 @@ void main(List<String> arguments) async {
               final cmd = jsonDecode(msg as String) as Map<String, dynamic>;
               if (cmd['action'] == 'history') {
                 final secs = (cmd['window'] as num?)?.toInt() ?? 3600;
-                final items = await collection
-                    .query()
-                    .where((item) => item.obj.timestamp.isAfter(
-                        DateTime.now().subtract(Duration(seconds: secs))))
-                    .orderBy((item) => item.obj.timestamp)
-                    .get();
-                final readings = items.map((i) => i.obj.toJson()).toList();
-                ws.sink.add(jsonEncode({'type': 'history', 'data': readings}));
+                final cutoff = DateTime.now().subtract(Duration(seconds: secs));
+                ws.sink.add(jsonEncode({
+                  'type': 'history',
+                  'data': _cacheSnapshot(cutoff),
+                }));
               }
             } catch (e) {
               _log.warning('Bad WS message: $e');
@@ -315,10 +326,111 @@ void main(List<String> arguments) async {
   // (e.g., large initial sync on a fresh installation) and ensures historical
   // data appears within at most 30 seconds of sync completing.
   Timer.periodic(const Duration(seconds: 30), (_) {
+    // Force a sync cycle so new readings arrive even if the notification
+    // WebSocket connection has silently dropped.
+    _atClient?.syncService.sync();
     if (_clients.isNotEmpty) {
       _pushHistoryAll(604800).ignore();
     }
+    // After the initial scan, poll for any keys that arrived since the scan
+    // completed.  This is the reliable realtime path — it works even when
+    // collection.updates stops firing.
+    _pollNewKeys().ignore();
   });
+
+  // ── atProtocol init in background so HTTP server is immediately available ─
+  unawaited(() async {
+    _log.info('Authenticating $atSign …');
+    final pref = cli.AtOnboardingPreference()
+      ..rootDomain = 'root.atsign.org'
+      ..namespace = 'kryz'
+      ..hiveStoragePath = '.atsign/storage/$atSign'
+      ..commitLogPath = '.atsign/storage/$atSign/commitLog'
+      ..atKeysFilePath = keysPath;
+
+    final onboarding = cli.AtOnboardingServiceImpl(atSign, pref);
+    if (!await onboarding.authenticate()) {
+      _log.severe('Authentication failed for $atSign');
+      exit(1);
+    }
+    _atClient = AtClientManager.getInstance().atClient;
+    final atClient = _atClient!;
+    _log.info('Authenticated as $atSign');
+
+    atClient.syncService.addProgressListener(_SyncProgressBroadcaster());
+
+    Future<void> loadAndBroadcastConfig() async {
+      try {
+        final key = AtKey()
+          ..key = 'kryz_dashboard_config'
+          ..sharedWith = atSign;
+        final result = await atClient.get(key);
+        if (result.value != null) {
+          final cfg = DashboardConfig.fromJson(
+              jsonDecode(result.value as String) as Map<String, dynamic>);
+          _lastConfigPayload = _configPayload(cfg);
+          _log.info('DashboardConfig loaded from atProtocol');
+        } else {
+          _lastConfigPayload = _configPayload(DashboardConfig.defaults());
+          _log.info('No stored config found — using defaults');
+        }
+      } catch (e) {
+        _lastConfigPayload = _configPayload(DashboardConfig.defaults());
+        _log.warning('Could not load DashboardConfig: $e — using defaults');
+      }
+      _broadcast(_lastConfigPayload!);
+    }
+
+    await loadAndBroadcastConfig();
+
+    atClient.notificationService
+        .subscribe(regex: '.*kryz_dashboard_config.*', shouldDecrypt: true)
+        .listen((_) async {
+      _log.info('Config change notification received — reloading');
+      await loadAndBroadcastConfig();
+    });
+
+    // Force the notification listener up before opening the collection so
+    // the first event doesn't race the lazy startup inside subscribe().
+    atClient.notificationService.startListening();
+
+    final collection = await atClient.collection<TransmitterStats>(
+      'stats.kryz',
+      const Duration(days: 7),
+      fromJson: TransmitterStats.fromJson,
+      typeTag: 'TransmitterStats',
+      eventSource: EventSource.data,
+    );
+    _log.info('Collection opened (stats.kryz)');
+
+    // Start loading historical data into the cache in the background.
+    // _loadHistoryCached() reads in batches and broadcasts partial results
+    // progressively, so charts start showing data within seconds.
+    _loadHistoryCached().ignore();
+
+    collection.updates.listen(
+      (event) async {
+        final citem = await collection.getOrNull(event.id, event.owner);
+        if (citem == null) return;
+        final stats = citem.obj;
+        _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
+        // Always add to cache so it appears in history.
+        _cacheAdd(stats);
+        if (_latestBroadcastTime != null &&
+            stats.timestamp.isBefore(_latestBroadcastTime!)) {
+          _log.fine(
+              'Out-of-order reading (${stats.timestamp}) — added to cache, skipping live broadcast');
+          return;
+        }
+        _latestBroadcastTime = stats.timestamp;
+        _broadcast({'type': 'reading', 'data': stats.toJson()});
+      },
+      onError: (Object e, StackTrace st) {
+        _log.warning('collection.updates error: $e\n$st');
+      },
+      cancelOnError: false,
+    );
+  }());
 
   // Clean shutdown
   ProcessSignal.sigint.watch().listen((_) async {
@@ -517,7 +629,7 @@ for (const m of METRICS) {
               millisecond: 'HH:mm:ss',
               second:      'HH:mm:ss',
               minute:      'HH:mm',
-              hour:        'HH:mm',
+              hour:        'MMM d HH:mm',
               day:         'MMM d',
               week:        'MMM d',
               month:       'MMM yyyy',
@@ -642,14 +754,30 @@ function updateSync(d) {
   pendEl.className = (d.pendingPushCount > 0) ? 's-behind' : '';
 }
 
+function setChartWindow(windowSecs) {
+  const now = Date.now();
+  const min = now - windowSecs * 1000;
+  for (const m of METRICS) {
+    charts[m.key].options.scales.x.min = min;
+    charts[m.key].options.scales.x.max = now;
+    charts[m.key].update('none');
+  }
+}
+
 function applyReadings(readings) {
   // Server may push up to 7 days; trim to the currently selected window
   // so the chart doesn't show more data than the user requested.
-  const cutoff = Date.now() - currentWindow * 1000;
+  const now = Date.now();
+  const cutoff = now - currentWindow * 1000;
   const windowed = readings.filter(r => new Date(r.timestamp).getTime() >= cutoff);
+  // Never replace chart data with an empty set — this would erase live readings
+  // that appendReading() added while the history scan was still running.
+  if (windowed.length === 0) return;
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
     ds.data = injectGaps(windowed, m.key);
+    charts[m.key].options.scales.x.min = cutoff;
+    charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
   }
   if (windowed.length > 0) updateMeters(windowed[windowed.length - 1]);
@@ -672,6 +800,8 @@ function appendReading(r) {
     _addInterval(ms);
     insertGap = ms > _gapThreshold(_recentIntervals);
   }
+  const now = Date.now();
+  const cutoff = now - currentWindow * 1000;
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
     if (insertGap) {
@@ -680,8 +810,9 @@ function appendReading(r) {
     }
     ds.data.push({x: new Date(r.timestamp), y: r[m.key]});
     // Trim old points outside the current window
-    const cutoff = Date.now() - currentWindow * 1000;
     while (ds.data.length && ds.data[0].x.getTime() < cutoff) ds.data.shift();
+    charts[m.key].options.scales.x.min = cutoff;
+    charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
   }
   updateMeters(r);
@@ -715,12 +846,17 @@ function connect() {
 
 connect();
 
+// Set initial x-axis bounds immediately so charts show the correct time range
+// before any data arrives from the server.
+setChartWindow(currentWindow);
+
 // ── Time-window toolbar ───────────────────────────────────────────────────────
 document.querySelectorAll('.toolbar button').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelector('.toolbar button.active').classList.remove('active');
     btn.classList.add('active');
     currentWindow = parseInt(btn.dataset.w, 10);
+    setChartWindow(currentWindow);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({action:'history', window: currentWindow}));
     }

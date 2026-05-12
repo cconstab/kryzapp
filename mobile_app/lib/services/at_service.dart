@@ -24,6 +24,7 @@ class AtService extends ChangeNotifier {
   // Sync progress tracking
   SyncProgress? _latestSync;
   SyncProgressListener? _syncListener;
+  Timer? _syncTimer;
 
   // Callbacks wired up by DashboardScreen
   Function(TransmitterStats)? onStatsReceived;
@@ -110,6 +111,9 @@ class AtService extends ChangeNotifier {
     _alertSubscription?.cancel();
     _alertSubscription = null;
 
+    _syncTimer?.cancel();
+    _syncTimer = null;
+
     notifyListeners();
   }
 
@@ -126,11 +130,16 @@ class AtService extends ChangeNotifier {
     logger.info('Opening AtCollection<TransmitterStats> (stats.kryz)');
 
     try {
+      // startListening ensures the notification service is up before the
+      // collection subscribes to its event stream.
+      _atClient!.notificationService.startListening();
+
       _statsCollection = await _atClient!.collection<TransmitterStats>(
         'stats.kryz',
         const Duration(days: 7),
         fromJson: TransmitterStats.fromJson,
         typeTag: 'TransmitterStats',
+        eventSource: EventSource.data,
       );
 
       logger.info('Collection opened — subscribing to updates stream');
@@ -162,6 +171,15 @@ class AtService extends ChangeNotifier {
       if (_statsCollection != null) {
         onCollectionReady?.call(_statsCollection!);
       }
+
+      // Trigger an immediate sync to pull any pending data from the atServer,
+      // then keep syncing every 30 s so live readings arrive even without
+      // push notifications (e.g. after the app comes back from background).
+      _atClient!.syncService.sync();
+      _syncTimer?.cancel();
+      _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (!_isDisposed) _atClient?.syncService.sync();
+      });
 
       // Alert notifications still travel via the notification service so the
       // mobile UI can pop up a modal immediately, without waiting for sync.
@@ -222,6 +240,9 @@ class AtService extends ChangeNotifier {
 
     _alertSubscription?.cancel();
     _alertSubscription = null;
+
+    _syncTimer?.cancel();
+    _syncTimer = null;
 
     super.dispose();
   }

@@ -56,7 +56,7 @@ class SNMPCollector {
       ..namespace = 'kryz'
       ..hiveStoragePath = '.atsign/storage/$atSign'
       ..commitLogPath = '.atsign/storage/$atSign/commitLog'
-      ..isLocalStoreRequired = true
+
       ..atKeysFilePath = keysFilePath;
 
     // Use at_onboarding_cli to onboard
@@ -72,6 +72,11 @@ class SNMPCollector {
 
     // Get the authenticated atClient
     atClient = AtClientManager.getInstance().atClient;
+    // Write directly to the remote secondary on every put/delete — no waiting
+    // for the background sync timer.  The change is then pulled back to local
+    // Hive by the sync process, so local storage stays consistent.
+    atClient.setPreferences(AtClientPreference()
+      ..remoteLocalPref = RemoteLocalPref.remoteOnly);
 
     logger.info('atClient initialised and authenticated successfully');
 

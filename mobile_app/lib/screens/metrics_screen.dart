@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
-import 'package:at_client/at_client.dart' show CItem, SyncProgress, SyncStatus;
+import 'package:at_client/at_client.dart' show SyncProgress, SyncStatus;
 import 'package:kryz_shared/kryz_shared.dart';
 import '../providers/transmitter_provider.dart';
 import '../services/at_service.dart';
@@ -187,9 +187,8 @@ class _MetricsTab extends StatefulWidget {
 }
 
 class _MetricsTabState extends State<_MetricsTab> {
-  Stream<List<CItem<TransmitterStats>>>? _stream;
+  Stream<List<TransmitterStats>>? _stream;
   TransmitterProvider? _provider;
-  SyncProgress? _lastSync;
 
   void _rebuildStream(TransmitterProvider provider) {
     _provider = provider;
@@ -200,33 +199,20 @@ class _MetricsTabState extends State<_MetricsTab> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final provider = Provider.of<TransmitterProvider>(context);
-    final atService = Provider.of<AtService>(context);
 
     // Create stream the first time the collection is ready, or if the
     // provider instance changes (re-authentication).
     if (provider.hasCollection && (_provider != provider || _stream == null)) {
       _rebuildStream(provider);
     }
-
-    // Recreate the stream after every successful sync so that historical
-    // items that were just downloaded are immediately visible.  Without this
-    // the watch() stream may not re-emit for items that arrived via sync.
-    final sync = atService.latestSync;
-    if (sync != null &&
-        sync != _lastSync &&
-        sync.syncStatus == SyncStatus.success &&
-        provider.hasCollection) {
-      _lastSync = sync;
-      _rebuildStream(provider);
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<CItem<TransmitterStats>>>(
+    return StreamBuilder<List<TransmitterStats>>(
       stream: _stream, // null while collection not yet ready → empty snapshot
       builder: (context, snapshot) {
-        final dataPoints = (snapshot.data ?? []).map((i) => i.obj).toList();
+        final dataPoints = snapshot.data ?? [];
         final isLoading = !snapshot.hasData;
 
         return Stack(
