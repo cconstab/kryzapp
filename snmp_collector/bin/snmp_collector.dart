@@ -4,15 +4,6 @@ import 'package:logging/logging.dart';
 import 'package:snmp_collector/collector/snmp_collector.dart';
 
 void main(List<String> arguments) async {
-  // Set up logging
-  Logger.root.level = Level.ALL;
-  Logger.root.onRecord.listen((record) {
-    print('${record.level.name}: ${record.time}: ${record.message}');
-  });
-
-  final logger = Logger('main');
-
-  // Parse command line arguments
   final parser = ArgParser()
     ..addOption('atsign', abbr: 'a', help: 'The @sign for this collector', mandatory: true)
     ..addOption('keys', abbr: 'k', help: 'Path to the .atKeys file (default: ~/.atsign/keys/<atsign>_key.atKeys)')
@@ -23,10 +14,21 @@ void main(List<String> arguments) async {
     ..addOption('community', abbr: 'c', help: 'SNMP community string', defaultsTo: 'public')
     ..addOption('interval', abbr: 'i', help: 'Poll interval in seconds', defaultsTo: '5')
     ..addFlag('simulated', abbr: 's', help: 'Use simulated data instead of real SNMP queries', defaultsTo: false)
+    ..addFlag('verbose', abbr: 'v', negatable: false, help: 'Enable verbose (FINE) logging; default is SEVERE only')
     ..addFlag('help', negatable: false, help: 'Show this help message');
 
+  // Parse early so -v takes effect before any logging.
+  // Re-parsed below inside the try block for full validation.
+  final earlyArgs = parser.parse(arguments);
+  Logger.root.level = (earlyArgs['verbose'] as bool) ? Level.FINE : Level.SEVERE;
+  Logger.root.onRecord.listen((record) {
+    print('${record.level.name}: ${record.time}: ${record.message}');
+  });
+
+  final logger = Logger('main');
+
   try {
-    final args = parser.parse(arguments);
+    final args = earlyArgs;
 
     if (args['help'] as bool) {
       print('KRYZ SNMP Collector');
