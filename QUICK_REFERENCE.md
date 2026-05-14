@@ -229,7 +229,7 @@ String? get alertLevel {
 | **Get @signs** | https://atsign.com |
 | **Discord** | https://discord.atsign.com |
 | **GitHub** | https://github.com/atsign-foundation |
-| **YouTube** | https://youtube.com/@atsigncompany |
+| **YouTube** | https://youtube.com/@AtsignCo |
 
 ---
 
