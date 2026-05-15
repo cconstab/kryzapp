@@ -340,6 +340,11 @@ class _MetricCard extends StatelessWidget {
     // instead of a misleading diagonal line across the outage period.
     final points = _injectGaps(data, spec.extract);
 
+    // Always span the full selected window so the axis reads correctly even
+    // when there is no data or data only covers part of the window.
+    final now = DateTime.now();
+    final windowStart = now.subtract(window.duration);
+
     // Marker settings (disable for large datasets to keep rendering fast)
     final markerSettings = MarkerSettings(
       isVisible: data.length <= 60,
@@ -420,6 +425,8 @@ class _MetricCard extends StatelessWidget {
                 plotAreaBorderWidth: 0,
                 primaryXAxis: DateTimeAxis(
                   isVisible: true,
+                  minimum: windowStart,
+                  maximum: now,
                   majorGridLines: const MajorGridLines(
                       width: 0.3, color: Color(0x33888888)),
                   axisLine: const AxisLine(width: 0),
