@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:at_client/at_client.dart' show AtCollection, AtClient;
+import 'package:at_client/at_client.dart'
+    show AtCollection, AtClient, SyncProgress, SyncProgressListener, SyncStatus;
 import 'package:kryz_shared/kryz_shared.dart';
 import 'dart:async';
 
@@ -22,6 +23,11 @@ class TransmitterProvider extends ChangeNotifier {
   final _historyController =
       StreamController<List<TransmitterStats>>.broadcast();
   AtClient? _atClient;
+
+  // Keys already fetched (populated during initial scan + periodic poll).
+  // Prevents duplicate fetches when _pollNewTierKeys() runs.
+  final Set<String> _scannedKeys = {};
+  SyncProgressListener? _syncListener;
 
   static const int maxHistoryLength = 100;
   static const Duration dataTimeout = Duration(minutes: 1);
@@ -76,6 +82,8 @@ class TransmitterProvider extends ChangeNotifier {
       final incoming = <TransmitterStats>[];
 
       for (var i = 0; i < keys.length; i++) {
+        final ks = keys[i].toString();
+        _scannedKeys.add(ks); // mark before fetch so poll skips these
         try {
           final val = await _atClient!.get(keys[i]);
           if (val.value != null) {
@@ -124,11 +132,66 @@ class TransmitterProvider extends ChangeNotifier {
   /// Passing [atClient] enables the background history loader.
   void setCollection(
       AtCollection<TransmitterStats> collection, AtClient atClient) {
+    // Detach any previous listener if re-authenticated.
+    if (_syncListener != null && _atClient != null) {
+      _atClient!.syncService.removeProgressListener(_syncListener!);
+    }
     _collection = collection;
     _atClient = atClient;
     notifyListeners();
-    // Start progressive background load — runs once; _cacheLoaded guards re-runs.
+
+    // Register a SyncProgressListener so we scan/poll immediately after each
+    // sync completes.  This avoids the race where the initial scan runs before
+    // the first sync has pulled keys into local Hive.
+    //
+    // Flow:
+    //   1. Immediate _loadHistoryCached() — loads whatever Hive already has
+    //      (may be empty on first run or after a scheme change).
+    //   2. First sync completes → listener fires → if scan already done,
+    //      _pollNewTierKeys() picks up newly synced 5m/1h keys immediately.
+    //   3. Every subsequent sync → same poll, keeps charts up-to-date.
+    _syncListener = _ProviderSyncListener((progress) {
+      if (progress.syncStatus == SyncStatus.success ||
+          progress.syncStatus == SyncStatus.failure) {
+        if (!_cacheLoaded) {
+          // Scan still running or hasn't started — retry with fresh Hive data.
+          _loadHistoryCached().ignore();
+        } else {
+          // Scan done — pick up any new tier-2/3 keys that arrived via sync.
+          _pollNewTierKeys().ignore();
+        }
+      }
+    });
+    atClient.syncService.addProgressListener(_syncListener!);
+
+    // Also kick off an immediate scan — handles the case where Hive already
+    // has data from a previous session so charts fill before the first sync.
     if (!_cacheLoaded) _loadHistoryCached().ignore();
+  }
+
+  /// Fetch any 5-min / 1-hour tier keys that arrived after the initial scan.
+  Future<void> _pollNewTierKeys() async {
+    if (_atClient == null) return;
+    try {
+      final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)\.kryz@');
+      final cutoff = DateTime.now().subtract(const Duration(days: 8));
+      for (final k in keys) {
+        final ks = k.toString();
+        if (_scannedKeys.contains(ks)) continue;
+        _scannedKeys.add(ks);
+        try {
+          final val = await _atClient!.get(k);
+          if (val.value == null) continue;
+          final env = jsonDecode(val.value as String) as Map<String, dynamic>;
+          if (env['type'] != 'TransmitterStats') continue;
+          final stats =
+              TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
+          if (stats.timestamp.isAfter(cutoff)) _cacheAdd(stats);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('TransmitterProvider._pollNewTierKeys error: $e');
+    }
   }
 
   /// Stream of readings within [window] from now, sorted oldest→newest.
@@ -192,6 +255,9 @@ class TransmitterProvider extends ChangeNotifier {
   @override
   void dispose() {
     _dataTimeoutTimer?.cancel();
+    if (_syncListener != null && _atClient != null) {
+      _atClient!.syncService.removeProgressListener(_syncListener!);
+    }
     _historyController.close();
     super.dispose();
   }
@@ -235,4 +301,14 @@ class TransmitterProvider extends ChangeNotifier {
 
     return values.reversed.toList();
   }
+}
+
+// ── Private helper ────────────────────────────────────────────────────────────
+class _ProviderSyncListener extends SyncProgressListener {
+  _ProviderSyncListener(this._onProgress);
+  final void Function(SyncProgress) _onProgress;
+
+  @override
+  void onSyncProgressEvent(SyncProgress syncProgress) =>
+      _onProgress(syncProgress);
 }

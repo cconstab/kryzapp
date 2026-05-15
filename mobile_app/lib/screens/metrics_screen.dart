@@ -198,7 +198,11 @@ class _MetricsTabState extends State<_MetricsTab> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final provider = Provider.of<TransmitterProvider>(context);
+    // listen: false — we only want the provider reference, not a rebuild
+    // subscription.  Rebuilding the stream on every notifyListeners() call
+    // (which fires every 2 s with live readings) resets the StreamBuilder
+    // snapshot to null, blanking the chart momentarily on each update.
+    final provider = Provider.of<TransmitterProvider>(context, listen: false);
 
     // Create stream the first time the collection is ready, or if the
     // provider instance changes (re-authentication).
@@ -208,7 +212,30 @@ class _MetricsTabState extends State<_MetricsTab> {
   }
 
   @override
+  void didUpdateWidget(_MetricsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.window != widget.window) {
+      final provider = Provider.of<TransmitterProvider>(context, listen: false);
+      if (provider.hasCollection) _rebuildStream(provider);
+    }
+  }
+
+  void _ensureStream() {
+    final provider = Provider.of<TransmitterProvider>(context, listen: false);
+    if (provider.hasCollection && (_provider != provider || _stream == null)) {
+      setState(() => _rebuildStream(provider));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // If the collection just became available (e.g. auth completed after
+    // this widget was already built), create the stream now.  Using a
+    // post-frame callback avoids calling setState during build.
+    if (_stream == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _ensureStream());
+    }
+
     return StreamBuilder<List<TransmitterStats>>(
       stream: _stream, // null while collection not yet ready → empty snapshot
       builder: (context, snapshot) {
