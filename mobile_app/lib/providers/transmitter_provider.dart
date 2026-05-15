@@ -71,7 +71,7 @@ class TransmitterProvider extends ChangeNotifier {
     if (_atClient == null || _historyCacheLoading || _cacheLoaded) return;
     _historyCacheLoading = true;
     try {
-      final keys = await _atClient!.getAtKeys(regex: r'stats(1m|30m)?\.kryz@');
+      final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
       final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
       final incoming = <TransmitterStats>[];
 

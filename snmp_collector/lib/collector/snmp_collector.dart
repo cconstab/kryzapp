@@ -36,7 +36,7 @@ class SNMPCollector {
     required this.transmitterHost,
     this.transmitterPort = 161,
     this.community = 'public',
-    this.pollIntervalSeconds = 5,
+    this.pollIntervalSeconds = 2,
     this.useSimulatedData = true,
   });
 

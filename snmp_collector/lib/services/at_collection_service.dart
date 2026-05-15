@@ -9,18 +9,19 @@ final _logger = Logger('AtCollectionService');
 ///
 /// Three resolution tiers, modelled on the MRTG/RRD consolidation approach:
 ///
-/// | Tier      | Namespace     | TTL   | Resolution  | Max keys (approx) |
-/// |-----------|---------------|-------|-------------|-------------------|
-/// | Raw       | stats.kryz    | 2 h   | every poll  | ~1 440            |
-/// | 1-minute  | stats1m.kryz  | 36 h  | 1-min avg   | ~2 160            |
-/// | 30-minute | stats30m.kryz | 10 d  | 30-min avg  | ~480              |
-/// | **Total** |               |       |             | **~4 080**        |
+/// | Tier     | Namespace    | TTL    | Resolution  | Max keys (approx) |
+/// |----------|--------------|--------|-------------|-------------------|
+/// | Raw      | stats.kryz   | 10 min | every 2 s   | ~300              |
+/// | 5-minute | stats5m.kryz | 26 h   | 5-min avg   | ~312              |
+/// | 1-hour   | stats1h.kryz | 8 d    | 1-hour avg  | ~192              |
+/// | **Total**|              |        |             | **~804**          |
 ///
-/// Compare with the naïve approach (7-day TTL, raw every 5 s): ~120 960 keys.
+/// Compare with the naïve approach (7-day TTL, raw every 2 s): ~302 400 keys.
 ///
-/// The raw tier feeds the live gauges and the 1-hour chart.
-/// The 1-minute tier feeds the 6-hour and 24-hour charts.
-/// The 30-minute tier feeds the 7-day chart.
+/// The raw tier feeds the live gauges and the recent end of the 1-hour chart
+/// (last 10 min at 2 s resolution).
+/// The 5-minute tier feeds the 6-hour and 24-hour charts.
+/// The 1-hour tier feeds the 7-day chart.
 ///
 /// Alert notifications are still sent via [AtNotificationService] for
 /// immediate delivery — this service handles only the stats collection.
@@ -31,16 +32,16 @@ class AtCollectionService {
   final Set<Atsign> receivers;
 
   late AtCollection<TransmitterStats> _rawCollection;
-  late AtCollection<TransmitterStats> _oneMinCollection;
-  late AtCollection<TransmitterStats> _thirtyMinCollection;
+  late AtCollection<TransmitterStats> _fiveMinCollection;
+  late AtCollection<TransmitterStats> _oneHourCollection;
 
-  // Rolling accumulator for the 1-minute consolidation bucket.
-  final List<TransmitterStats> _oneMinBuffer = [];
-  DateTime? _oneMinBucketStart;
+  // Rolling accumulator for the 5-minute consolidation bucket.
+  final List<TransmitterStats> _fiveMinBuffer = [];
+  DateTime? _fiveMinBucketStart;
 
-  // Rolling accumulator for the 30-minute consolidation bucket.
-  final List<TransmitterStats> _thirtyMinBuffer = [];
-  DateTime? _thirtyMinBucketStart;
+  // Rolling accumulator for the 1-hour consolidation bucket.
+  final List<TransmitterStats> _oneHourBuffer = [];
+  DateTime? _oneHourBucketStart;
 
   AtCollectionService({
     required this.atClient,
@@ -55,42 +56,43 @@ class AtCollectionService {
 
     atClient.notificationService.startListening();
 
-    // Raw — live feed + 1-hour chart.  Short TTL keeps key count bounded.
+    // Raw — live gauges + recent tail of the 1-hour chart.  Very short TTL
+    // keeps the key count tiny (~300 keys at 2 s poll rate).
     _rawCollection = await atClient.collection<TransmitterStats>(
       'stats.kryz',
-      const Duration(hours: 2),
+      const Duration(minutes: 10),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
       eventSource: EventSource.data,
     );
 
-    // 1-minute averages — 6-hour and 24-hour charts.
-    _oneMinCollection = await atClient.collection<TransmitterStats>(
-      'stats1m.kryz',
-      const Duration(hours: 36),
+    // 5-minute averages — 6-hour and 24-hour charts.
+    _fiveMinCollection = await atClient.collection<TransmitterStats>(
+      'stats5m.kryz',
+      const Duration(hours: 26),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
       eventSource: EventSource.data,
     );
 
-    // 30-minute averages — 7-day chart.
-    _thirtyMinCollection = await atClient.collection<TransmitterStats>(
-      'stats30m.kryz',
-      const Duration(days: 10),
+    // 1-hour averages — 7-day chart.
+    _oneHourCollection = await atClient.collection<TransmitterStats>(
+      'stats1h.kryz',
+      const Duration(days: 8),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
       eventSource: EventSource.data,
     );
 
     _logger.info('Tiered AtCollection storage initialised '
-        '(raw 2 h / 1-min 36 h / 30-min 10 d)');
+        '(raw 10 min / 5-min 26 h / 1-hour 8 d)');
   }
 
   /// Persist [stats] to the appropriate resolution tiers.
   ///
-  /// Every reading goes into the raw tier immediately.  When a 1-minute or
-  /// 30-minute bucket closes, an averaged record is written to the
-  /// corresponding higher tier.
+  /// Every reading goes into the raw tier immediately.  When a 5-minute or
+  /// 1-hour bucket closes, an averaged record is written to the corresponding
+  /// higher tier.
   Future<void> appendReading(TransmitterStats stats) async {
     try {
       // ── Raw tier ─────────────────────────────────────────────────────────
@@ -99,31 +101,31 @@ class AtCollectionService {
           'Appended reading: ${stats.transmitterId} @ ${stats.timestamp.toIso8601String()}');
 
       // ── Accumulate into consolidation buckets ─────────────────────────────
-      _oneMinBucketStart ??= stats.timestamp;
-      _thirtyMinBucketStart ??= stats.timestamp;
-      _oneMinBuffer.add(stats);
-      _thirtyMinBuffer.add(stats);
+      _fiveMinBucketStart ??= stats.timestamp;
+      _oneHourBucketStart ??= stats.timestamp;
+      _fiveMinBuffer.add(stats);
+      _oneHourBuffer.add(stats);
 
-      // ── Flush 1-minute bucket ─────────────────────────────────────────────
-      if (stats.timestamp.difference(_oneMinBucketStart!) >=
-          const Duration(minutes: 1)) {
-        final avg = _consolidate(_oneMinBuffer);
-        await _oneMinCollection.create(obj: avg, sharedWith: receivers);
-        _logger.fine('1-min avg written @ ${avg.timestamp.toIso8601String()} '
-            '(${_oneMinBuffer.length} readings)');
-        _oneMinBuffer.clear();
-        _oneMinBucketStart = null;
+      // ── Flush 5-minute bucket ─────────────────────────────────────────────
+      if (stats.timestamp.difference(_fiveMinBucketStart!) >=
+          const Duration(minutes: 5)) {
+        final avg = _consolidate(_fiveMinBuffer);
+        await _fiveMinCollection.create(obj: avg, sharedWith: receivers);
+        _logger.fine('5-min avg written @ ${avg.timestamp.toIso8601String()} '
+            '(${_fiveMinBuffer.length} readings)');
+        _fiveMinBuffer.clear();
+        _fiveMinBucketStart = null;
       }
 
-      // ── Flush 30-minute bucket ────────────────────────────────────────────
-      if (stats.timestamp.difference(_thirtyMinBucketStart!) >=
-          const Duration(minutes: 30)) {
-        final avg = _consolidate(_thirtyMinBuffer);
-        await _thirtyMinCollection.create(obj: avg, sharedWith: receivers);
-        _logger.fine('30-min avg written @ ${avg.timestamp.toIso8601String()} '
-            '(${_thirtyMinBuffer.length} readings)');
-        _thirtyMinBuffer.clear();
-        _thirtyMinBucketStart = null;
+      // ── Flush 1-hour bucket ───────────────────────────────────────────────
+      if (stats.timestamp.difference(_oneHourBucketStart!) >=
+          const Duration(hours: 1)) {
+        final avg = _consolidate(_oneHourBuffer);
+        await _oneHourCollection.create(obj: avg, sharedWith: receivers);
+        _logger.fine('1-hour avg written @ ${avg.timestamp.toIso8601String()} '
+            '(${_oneHourBuffer.length} readings)');
+        _oneHourBuffer.clear();
+        _oneHourBucketStart = null;
       }
     } catch (e, st) {
       _logger.severe('Failed to append reading', e, st);

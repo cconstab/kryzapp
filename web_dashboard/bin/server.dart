@@ -73,7 +73,7 @@ Future<void> _loadHistoryCached() async {
   _historyCacheLoading = true;
   try {
     final sw = Stopwatch()..start();
-    final keys = await _atClient!.getAtKeys(regex: r'stats(1m|30m)?\.kryz@');
+    final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
     _log.info(
         'History scan: ${keys.length} stats keys found in ${sw.elapsedMilliseconds}ms');
     final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
@@ -157,7 +157,7 @@ Map<String, dynamic> _configPayload(DashboardConfig cfg) {
 Future<void> _pollNewKeys() async {
   if (!_cacheLoaded || _atClient == null) return;
   try {
-    final allKeys = await _atClient!.getAtKeys(regex: r'stats(1m|30m)?\.kryz@');
+    final allKeys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
     final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
     for (final k in allKeys) {
       final ks = k.toString();
