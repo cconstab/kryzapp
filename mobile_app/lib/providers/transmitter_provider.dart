@@ -1,7 +1,14 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:at_client/at_client.dart'
-    show AtCollection, AtClient, SyncProgress, SyncProgressListener, SyncStatus;
+    show
+        AtCollection,
+        AtClient,
+        CItem,
+        EventSource,
+        SyncProgress,
+        SyncProgressListener,
+        SyncStatus;
 import 'package:kryz_shared/kryz_shared.dart';
 import 'dart:async';
 
@@ -26,7 +33,10 @@ class TransmitterProvider extends ChangeNotifier {
 
   // Keys already fetched (populated during initial scan + periodic poll).
   // Prevents duplicate fetches when _pollNewTierKeys() runs.
-  final Set<String> _scannedKeys = {};
+  AtCollection<TransmitterStats>? _fiveMinCollection;
+  AtCollection<TransmitterStats>? _oneHourCollection;
+  StreamSubscription<dynamic>? _fiveMinSub;
+  StreamSubscription<dynamic>? _oneHourSub;
   SyncProgressListener? _syncListener;
 
   static const int maxHistoryLength = 100;
@@ -77,13 +87,11 @@ class TransmitterProvider extends ChangeNotifier {
     if (_atClient == null || _historyCacheLoading || _cacheLoaded) return;
     _historyCacheLoading = true;
     try {
-      final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
+      final keys = await _atClient!.getAtKeys(regex: r'stats\.kryz@');
       final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
       final incoming = <TransmitterStats>[];
 
       for (var i = 0; i < keys.length; i++) {
-        final ks = keys[i].toString();
-        _scannedKeys.add(ks); // mark before fetch so poll skips these
         try {
           final val = await _atClient!.get(keys[i]);
           if (val.value != null) {
@@ -140,57 +148,96 @@ class TransmitterProvider extends ChangeNotifier {
     _atClient = atClient;
     notifyListeners();
 
-    // Register a SyncProgressListener so we scan/poll immediately after each
-    // sync completes.  This avoids the race where the initial scan runs before
-    // the first sync has pulled keys into local Hive.
-    //
-    // Flow:
-    //   1. Immediate _loadHistoryCached() — loads whatever Hive already has
-    //      (may be empty on first run or after a scheme change).
-    //   2. First sync completes → listener fires → if scan already done,
-    //      _pollNewTierKeys() picks up newly synced 5m/1h keys immediately.
-    //   3. Every subsequent sync → same poll, keeps charts up-to-date.
+    // Open the tier-2/3 collections and stream their items directly —
+    // no getAtKeys regex scanning needed.
+    _openTierCollections(atClient).ignore();
+
+    // After each sync, call getItems() on both tier collections as a
+    // fallback in case collection.updates silently drops an event.
     _syncListener = _ProviderSyncListener((progress) {
       if (progress.syncStatus == SyncStatus.success ||
           progress.syncStatus == SyncStatus.failure) {
-        if (!_cacheLoaded) {
-          // Scan still running or hasn't started — retry with fresh Hive data.
-          _loadHistoryCached().ignore();
-        } else {
-          // Scan done — pick up any new tier-2/3 keys that arrived via sync.
-          _pollNewTierKeys().ignore();
-        }
+        _refreshTierCollections().ignore();
       }
     });
     atClient.syncService.addProgressListener(_syncListener!);
 
-    // Also kick off an immediate scan — handles the case where Hive already
-    // has data from a previous session so charts fill before the first sync.
+    // Load raw-tier keys already in Hive (up to 10 min old).
     if (!_cacheLoaded) _loadHistoryCached().ignore();
   }
 
-  /// Fetch any 5-min / 1-hour tier keys that arrived after the initial scan.
-  Future<void> _pollNewTierKeys() async {
-    if (_atClient == null) return;
+  /// Open the 5-minute and 1-hour tier collections, load existing items, and
+  /// subscribe to their [updates] stream for incoming readings.
+  Future<void> _openTierCollections(AtClient atClient) async {
     try {
-      final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)\.kryz@');
-      final cutoff = DateTime.now().subtract(const Duration(days: 8));
-      for (final k in keys) {
-        final ks = k.toString();
-        if (_scannedKeys.contains(ks)) continue;
-        _scannedKeys.add(ks);
-        try {
-          final val = await _atClient!.get(k);
-          if (val.value == null) continue;
-          final env = jsonDecode(val.value as String) as Map<String, dynamic>;
-          if (env['type'] != 'TransmitterStats') continue;
-          final stats =
-              TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
-          if (stats.timestamp.isAfter(cutoff)) _cacheAdd(stats);
-        } catch (_) {}
+      _fiveMinSub?.cancel();
+      _oneHourSub?.cancel();
+
+      _fiveMinCollection = await atClient.collection<TransmitterStats>(
+        'stats5m.kryz',
+        const Duration(hours: 26),
+        fromJson: TransmitterStats.fromJson,
+        typeTag: 'TransmitterStats',
+        eventSource: EventSource.data,
+      );
+
+      _oneHourCollection = await atClient.collection<TransmitterStats>(
+        'stats1h.kryz',
+        const Duration(days: 8),
+        fromJson: TransmitterStats.fromJson,
+        typeTag: 'TransmitterStats',
+        eventSource: EventSource.data,
+      );
+
+      // Load whatever Hive already has (may be empty on first run).
+      await _refreshTierCollections();
+
+      // Stream new items as they arrive — fires on Hive writes from sync.
+      _fiveMinSub = _fiveMinCollection!.updates.listen(
+        (event) async {
+          final item =
+              await _fiveMinCollection!.getOrNull(event.id, event.owner);
+          if (item != null) _cacheAdd(item.obj);
+        },
+        onError: (Object e) =>
+            debugPrint('TransmitterProvider: 5m updates error: $e'),
+        cancelOnError: false,
+      );
+
+      _oneHourSub = _oneHourCollection!.updates.listen(
+        (event) async {
+          final item =
+              await _oneHourCollection!.getOrNull(event.id, event.owner);
+          if (item != null) _cacheAdd(item.obj);
+        },
+        onError: (Object e) =>
+            debugPrint('TransmitterProvider: 1h updates error: $e'),
+        cancelOnError: false,
+      );
+    } catch (e) {
+      debugPrint('TransmitterProvider._openTierCollections error: $e');
+    }
+  }
+
+  /// Re-read all items from the tier collections and merge into cache.
+  /// [_cacheAdd] deduplicates by (transmitterId, timestamp) so calling
+  /// this multiple times is safe and cheap.
+  Future<void> _refreshTierCollections() async {
+    try {
+      if (_fiveMinCollection != null) {
+        final items = await _fiveMinCollection!.getItems();
+        for (final CItem<TransmitterStats> item in items) {
+          _cacheAdd(item.obj);
+        }
+      }
+      if (_oneHourCollection != null) {
+        final items = await _oneHourCollection!.getItems();
+        for (final CItem<TransmitterStats> item in items) {
+          _cacheAdd(item.obj);
+        }
       }
     } catch (e) {
-      debugPrint('TransmitterProvider._pollNewTierKeys error: $e');
+      debugPrint('TransmitterProvider._refreshTierCollections error: $e');
     }
   }
 
@@ -255,6 +302,8 @@ class TransmitterProvider extends ChangeNotifier {
   @override
   void dispose() {
     _dataTimeoutTimer?.cancel();
+    _fiveMinSub?.cancel();
+    _oneHourSub?.cancel();
     if (_syncListener != null && _atClient != null) {
       _atClient!.syncService.removeProgressListener(_syncListener!);
     }

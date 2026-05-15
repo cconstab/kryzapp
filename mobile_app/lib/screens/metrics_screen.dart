@@ -98,32 +98,39 @@ class _DataPoint {
   final double? value; // null → gap sentinel
 }
 
-/// Computes the median inter-reading interval from [data], then uses 3× that
-/// as the gap threshold.  This is fully adaptive: if the poll interval is
-/// changed at runtime the threshold automatically follows without any code
-/// change.
-Duration _adaptiveGapThreshold(List<TransmitterStats> data) {
-  if (data.length < 2) return const Duration(days: 999); // no gaps possible
-  final ms = <int>[];
-  for (var i = 1; i < data.length; i++) {
-    final diff =
-        data[i].timestamp.difference(data[i - 1].timestamp).inMilliseconds;
-    if (diff > 0) ms.add(diff);
-  }
-  if (ms.isEmpty) return const Duration(days: 999);
-  ms.sort();
-  final medianMs = ms[ms.length ~/ 2];
-  return Duration(milliseconds: medianMs * 3);
-}
+/// Returns the gap threshold for a given chart window.
+///
+/// With MRTG-style tiered storage the cache can contain a mix of raw (2 s),
+/// 5-minute and 1-hour tier readings.  Using the median inter-reading
+/// interval as the threshold fails because the dense raw tier dominates the
+/// distribution and assigns a ~6 s threshold to everything, turning every
+/// 5-minute gap between tier-2 points into a break in the line.
+///
+/// Instead we use a fixed threshold that is comfortably above the coarsest
+/// tier resolution visible in each window but well below a real outage:
+///
+/// | Window | Coarsest tier | Threshold | Real gap detectable |
+/// |--------|---------------|-----------|---------------------|
+/// | 1 h    | raw (2 s)     | 10 min    | ≥ 10 min outage     |
+/// | 6 h    | 5 min avg     | 10 min    | ≥ 10 min outage     |
+/// | 24 h   | 5 min avg     | 10 min    | ≥ 10 min outage     |
+/// | 7 d    | 1 hour avg    | 2 h       | ≥ 2 h outage        |
+Duration _gapThresholdForWindow(_Window window) => switch (window) {
+      _Window.hour1 => const Duration(minutes: 10),
+      _Window.hour6 => const Duration(minutes: 10),
+      _Window.hour24 => const Duration(minutes: 10),
+      _Window.days7 => const Duration(hours: 2),
+    };
 
 List<_DataPoint> _injectGaps(
   List<TransmitterStats> data,
   double Function(TransmitterStats) extract,
+  _Window window,
 ) {
   if (data.length < 2) {
     return data.map((s) => _DataPoint(s.timestamp, extract(s))).toList();
   }
-  final threshold = _adaptiveGapThreshold(data);
+  final threshold = _gapThresholdForWindow(window);
   final result = <_DataPoint>[];
   for (var i = 0; i < data.length; i++) {
     if (i > 0) {
@@ -363,18 +370,26 @@ class _MetricCard extends StatelessWidget {
         ),
     ];
 
-    // Inject null sentinels at gaps so the chart shows a visible break
-    // instead of a misleading diagonal line across the outage period.
-    final points = _injectGaps(data, spec.extract);
-
     // Always span the full selected window so the axis reads correctly even
     // when there is no data or data only covers part of the window.
     final now = DateTime.now();
     final windowStart = now.subtract(window.duration);
 
+    // Re-filter with the same 'now' used for the axis minimum/maximum.
+    // historyStream() computes its cutoff slightly earlier than this build
+    // runs, so a point can slip through the stream filter but land before
+    // axis.minimum — causing Syncfusion to clip it to the left edge and
+    // draw a backward line ("folds over itself").
+    final windowedData =
+        data.where((s) => !s.timestamp.isBefore(windowStart)).toList();
+
+    // Inject null sentinels at gaps so the chart shows a visible break
+    // instead of a misleading diagonal line across the outage period.
+    final points = _injectGaps(windowedData, spec.extract, window);
+
     // Marker settings (disable for large datasets to keep rendering fast)
     final markerSettings = MarkerSettings(
-      isVisible: data.length <= 60,
+      isVisible: windowedData.length <= 60,
       height: 4,
       width: 4,
     );
