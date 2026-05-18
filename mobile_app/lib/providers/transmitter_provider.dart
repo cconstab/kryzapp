@@ -31,12 +31,18 @@ class TransmitterProvider extends ChangeNotifier {
       StreamController<List<TransmitterStats>>.broadcast();
   AtClient? _atClient;
 
-  // Keys already fetched (populated during initial scan + periodic poll).
-  // Prevents duplicate fetches when _pollNewTierKeys() runs.
-  AtCollection<TransmitterStats>? _fiveMinCollection;
-  AtCollection<TransmitterStats>? _oneHourCollection;
-  StreamSubscription<dynamic>? _fiveMinSub;
-  StreamSubscription<dynamic>? _oneHourSub;
+  // Tier collections — used only for the catch-up `getItems()` sweep that
+  // runs after each sync.  Live updates arrive via the raw notification
+  // subscriptions below: in at_client 3.12.0-rc.2 `AtCollection.updates` →
+  // `getOrNull(id, owner)` round-trips fail for cached recipient-side keys
+  // (the cached key carries a `cached:<receiver>:` two-segment prefix but
+  // the lookup regex only tolerates one prefix segment), so charts would
+  // sit empty until each sync rewrote keys in single-prefix form.  Raw
+  // `notificationService.subscribe` delivers each new average in ms.
+  AtCollection<TransmitterStats>? _fiveMinColl;
+  AtCollection<TransmitterStats>? _oneHourColl;
+  StreamSubscription<dynamic>? _fiveMinNotifSub;
+  StreamSubscription<dynamic>? _oneHourNotifSub;
   SyncProgressListener? _syncListener;
 
   static const int maxHistoryLength = 100;
@@ -166,14 +172,16 @@ class TransmitterProvider extends ChangeNotifier {
     if (!_cacheLoaded) _loadHistoryCached().ignore();
   }
 
-  /// Open the 5-minute and 1-hour tier collections, load existing items, and
-  /// subscribe to their [updates] stream for incoming readings.
+  /// Open the 5-minute and 1-hour tier collections.  Live updates come
+  /// from raw `notificationService.subscribe` streams; the collections
+  /// themselves are kept only for the post-sync catch-up `getItems()`
+  /// sweep in [_refreshTierCollections] (see class field doc for why).
   Future<void> _openTierCollections(AtClient atClient) async {
     try {
-      _fiveMinSub?.cancel();
-      _oneHourSub?.cancel();
+      _fiveMinNotifSub?.cancel();
+      _oneHourNotifSub?.cancel();
 
-      _fiveMinCollection = await atClient.collection<TransmitterStats>(
+      _fiveMinColl = await atClient.collection<TransmitterStats>(
         'stats5m.kryz',
         const Duration(hours: 26),
         fromJson: TransmitterStats.fromJson,
@@ -181,7 +189,7 @@ class TransmitterProvider extends ChangeNotifier {
         eventSource: EventSource.data,
       );
 
-      _oneHourCollection = await atClient.collection<TransmitterStats>(
+      _oneHourColl = await atClient.collection<TransmitterStats>(
         'stats1h.kryz',
         const Duration(days: 8),
         fromJson: TransmitterStats.fromJson,
@@ -192,26 +200,31 @@ class TransmitterProvider extends ChangeNotifier {
       // Load whatever Hive already has (may be empty on first run).
       await _refreshTierCollections();
 
-      // Stream new items as they arrive — fires on Hive writes from sync.
-      _fiveMinSub = _fiveMinCollection!.updates.listen(
-        (event) async {
-          final item =
-              await _fiveMinCollection!.getOrNull(event.id, event.owner);
-          if (item != null) _cacheAdd(item.obj);
-        },
-        onError: (Object e) =>
-            debugPrint('TransmitterProvider: 5m updates error: $e'),
+      // ── Raw notification subscriptions (live, ms-latency) ──────────────
+      // Item key shape: `<receiver>:<itemId>.stats5m.kryz@<sender>`.
+      atClient.notificationService.startListening();
+
+      _fiveMinNotifSub = atClient.notificationService
+          .subscribe(
+        regex: r'.*\.stats5m\.kryz@.*',
+        shouldDecrypt: true,
+      )
+          .handleError((Object e) {
+        debugPrint('TransmitterProvider: 5m notif sub error: $e');
+      }).listen(
+        (n) => _handleTierNotification(n.value),
         cancelOnError: false,
       );
 
-      _oneHourSub = _oneHourCollection!.updates.listen(
-        (event) async {
-          final item =
-              await _oneHourCollection!.getOrNull(event.id, event.owner);
-          if (item != null) _cacheAdd(item.obj);
-        },
-        onError: (Object e) =>
-            debugPrint('TransmitterProvider: 1h updates error: $e'),
+      _oneHourNotifSub = atClient.notificationService
+          .subscribe(
+        regex: r'.*\.stats1h\.kryz@.*',
+        shouldDecrypt: true,
+      )
+          .handleError((Object e) {
+        debugPrint('TransmitterProvider: 1h notif sub error: $e');
+      }).listen(
+        (n) => _handleTierNotification(n.value),
         cancelOnError: false,
       );
     } catch (e) {
@@ -219,19 +232,35 @@ class TransmitterProvider extends ChangeNotifier {
     }
   }
 
-  /// Re-read all items from the tier collections and merge into cache.
-  /// [_cacheAdd] deduplicates by (transmitterId, timestamp) so calling
-  /// this multiple times is safe and cheap.
+  /// Decode an envelope-shaped notification value
+  /// (`{"type":"TransmitterStats","obj":{...}}`) and add it to the cache.
+  void _handleTierNotification(String? value) {
+    try {
+      if (value == null || value.isEmpty) return;
+      if (!value.startsWith('{')) return; // not decrypted
+      final env = jsonDecode(value) as Map<String, dynamic>;
+      if (env['type'] != 'TransmitterStats') return;
+      final stats =
+          TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
+      _cacheAdd(stats);
+    } catch (e) {
+      debugPrint('TransmitterProvider._handleTierNotification error: $e');
+    }
+  }
+
+  /// Full sweep of both tier collections — reads every item from Hive and
+  /// merges into the cache.  [_cacheAdd] deduplicates so this is safe to
+  /// call multiple times and won't produce duplicate chart points.
   Future<void> _refreshTierCollections() async {
     try {
-      if (_fiveMinCollection != null) {
-        final items = await _fiveMinCollection!.getItems();
+      if (_fiveMinColl != null) {
+        final items = await _fiveMinColl!.getItems();
         for (final CItem<TransmitterStats> item in items) {
           _cacheAdd(item.obj);
         }
       }
-      if (_oneHourCollection != null) {
-        final items = await _oneHourCollection!.getItems();
+      if (_oneHourColl != null) {
+        final items = await _oneHourColl!.getItems();
         for (final CItem<TransmitterStats> item in items) {
           _cacheAdd(item.obj);
         }
@@ -302,8 +331,8 @@ class TransmitterProvider extends ChangeNotifier {
   @override
   void dispose() {
     _dataTimeoutTimer?.cancel();
-    _fiveMinSub?.cancel();
-    _oneHourSub?.cancel();
+    _fiveMinNotifSub?.cancel();
+    _oneHourNotifSub?.cancel();
     if (_syncListener != null && _atClient != null) {
       _atClient!.syncService.removeProgressListener(_syncListener!);
     }

@@ -14,9 +14,16 @@ class AtService extends ChangeNotifier {
   bool _isInitialized = false;
   bool _isDisposed = false;
 
-  // Collection for persisted stats (replaces the old notification-based stats feed)
+  // Collection for persisted stats (used only for historical queries / sync;
+  // live stats arrive via the raw notification stream below — see comment in
+  // _subscribeToCollection() for why we can't trust AtCollection.updates here).
   AtCollection<TransmitterStats>? _statsCollection;
-  StreamSubscription? _collectionSub;
+
+  // Raw notification subscription for live stats — delivers each 2-second
+  // reading within milliseconds of arrival (bypasses the AtCollection.updates
+  // → getOrNull round-trip which currently fails for cached recipient-side
+  // keys in at_client 3.12.0-rc.2).
+  StreamSubscription? _statsNotifSub;
 
   // Alert notifications remain on the notification service for immediate delivery
   StreamSubscription? _alertSubscription;
@@ -105,8 +112,8 @@ class AtService extends ChangeNotifier {
     _atClient = null;
     _statsCollection = null;
 
-    _collectionSub?.cancel();
-    _collectionSub = null;
+    _statsNotifSub?.cancel();
+    _statsNotifSub = null;
 
     _alertSubscription?.cancel();
     _alertSubscription = null;
@@ -118,8 +125,20 @@ class AtService extends ChangeNotifier {
   }
 
   /// Open the [AtCollection<TransmitterStats>] and subscribe to:
-  ///   1. New readings  → via [collection.updates] (replaces old notify-based stats)
+  ///   1. New readings  → via raw `notificationService.subscribe` so each
+  ///      2-second push from the collector updates the gauge within ms.
   ///   2. Alert events  → still via [notificationService] for immediate delivery
+  ///
+  /// Why not [AtCollection.updates]?  In at_client 3.12.0-rc.2 the SDK
+  /// stores received notifications under a `cached:<receiver>:<id>.<ns>@<sender>`
+  /// key (two `:` prefix segments), but `AtCollection.getOrNull(id, owner)`
+  /// builds a regex that only tolerates one prefix segment
+  /// (`^(?!local:)(?:[^:]*:)?<id>\.<ns>@<sender>`).  That means the
+  /// `CItemUpdated` event fires but the immediate `getOrNull` call returns
+  /// null — so gauges stay stuck until sync rewrites the key in
+  /// single-prefix form (typically ~30 s later).  Bypassing AtCollection
+  /// and reading `n.value` directly delivers the same envelope JSON the
+  /// publisher wrote (`{type:'TransmitterStats', obj:{...}}`) instantly.
   Future<void> _subscribeToCollection() async {
     if (_atClient == null || _isDisposed) {
       logger
@@ -130,39 +149,39 @@ class AtService extends ChangeNotifier {
     logger.info('Opening AtCollection<TransmitterStats> (stats.kryz)');
 
     try {
-      // startListening ensures the notification service is up before the
-      // collection subscribes to its event stream.
+      // startListening ensures the notification service is up before we
+      // subscribe to its event stream.
       _atClient!.notificationService.startListening();
 
+      // Open the collection so that history queries (getItems / getAtKeys)
+      // and future sync writes have a typed entry point — but DON'T listen
+      // to its `updates` stream (see method docstring above).
       _statsCollection = await _atClient!.collection<TransmitterStats>(
         'stats.kryz',
-        const Duration(days: 7),
+        const Duration(minutes: 10),
         fromJson: TransmitterStats.fromJson,
         typeTag: 'TransmitterStats',
-        eventSource: EventSource.data,
+        eventSource: EventSource.notifs,
       );
 
-      logger.info('Collection opened — subscribing to updates stream');
+      logger.info(
+          'Collection opened — subscribing to raw stats notifications');
 
-      // Listen for new / updated readings written by the collector.
-      // CItemUpdated carries (owner, id) only — fetch the item to get the obj.
-      _collectionSub = _statsCollection!.updates.listen(
-        (event) async {
+      // Match every notification whose key is a stats.kryz collection item.
+      // Shape: `<receiver>:<itemId>.stats.kryz@<sender>` — the leading `.`
+      // before `stats` excludes `stats5m.kryz` / `stats1h.kryz` (which the
+      // TransmitterProvider subscribes to separately for chart tiers).
+      _statsNotifSub = _atClient!.notificationService
+          .subscribe(
+        regex: r'.*\.stats\.kryz@.*',
+        shouldDecrypt: true,
+      )
+          .handleError((error) {
+        logger.warning('Stats notification subscription error: $error');
+      }).listen(
+        (notification) {
           if (_isDisposed) return;
-          try {
-            final citem =
-                await _statsCollection!.getOrNull(event.id, event.owner);
-            if (citem == null) return;
-            final stats = citem.obj;
-            logger.info('Collection update: ${stats.transmitterId} '
-                'powerOut=${stats.powerOut}W @ ${stats.timestamp}');
-            onStatsReceived?.call(stats);
-          } catch (e, st) {
-            logger.severe('Error processing collection event', e, st);
-          }
-        },
-        onError: (error, st) {
-          logger.severe('Collection updates stream error', error, st);
+          _handleStatsNotification(notification);
         },
         cancelOnError: false,
       );
@@ -173,8 +192,10 @@ class AtService extends ChangeNotifier {
       }
 
       // Trigger an immediate sync to pull any pending data from the atServer,
-      // then keep syncing every 30 s so live readings arrive even without
-      // push notifications (e.g. after the app comes back from background).
+      // then keep syncing every 30 s as a catch-up safety net for missed
+      // notifications (e.g. after the app comes back from background).  Live
+      // updates do NOT depend on this timer anymore — they arrive via the
+      // notification stream above.
       _atClient!.syncService.sync();
       _syncTimer?.cancel();
       _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
@@ -198,9 +219,34 @@ class AtService extends ChangeNotifier {
         cancelOnError: false,
       );
 
-      logger.info('Collection + alert subscriptions active');
+      logger.info('Stats + alert notification subscriptions active');
     } catch (e, st) {
       logger.severe('Failed to open collection or subscribe', e, st);
+    }
+  }
+
+  /// Parse a stats collection notification and forward the decoded
+  /// [TransmitterStats] to the dashboard.  Notification `value` is the
+  /// decrypted envelope JSON that [AtCollection.create] originally wrote:
+  /// `{"type":"TransmitterStats","obj":{...}}`.
+  void _handleStatsNotification(AtNotification notification) {
+    try {
+      final value = notification.value;
+      if (value == null || value.isEmpty) return;
+      if (!value.startsWith('{')) {
+        logger.warning(
+            'Stats notification value not decrypted, skipping (key=${notification.key})');
+        return;
+      }
+      final env = jsonDecode(value) as Map<String, dynamic>;
+      if (env['type'] != 'TransmitterStats') return;
+      final stats =
+          TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
+      logger.fine('Notif → ${stats.transmitterId} '
+          'powerOut=${stats.powerOut}W @ ${stats.timestamp}');
+      onStatsReceived?.call(stats);
+    } catch (e, st) {
+      logger.severe('Failed to parse stats notification', e, st);
     }
   }
 
@@ -235,8 +281,8 @@ class AtService extends ChangeNotifier {
       _syncListener = null;
     }
 
-    _collectionSub?.cancel();
-    _collectionSub = null;
+    _statsNotifSub?.cancel();
+    _statsNotifSub = null;
 
     _alertSubscription?.cancel();
     _alertSubscription = null;

@@ -387,12 +387,9 @@ class _MetricCard extends StatelessWidget {
     // instead of a misleading diagonal line across the outage period.
     final points = _injectGaps(windowedData, spec.extract, window);
 
-    // Marker settings (disable for large datasets to keep rendering fast)
-    final markerSettings = MarkerSettings(
-      isVisible: windowedData.length <= 60,
-      height: 4,
-      width: 4,
-    );
+    // Marker settings — always hidden; line charts look cleaner without dots
+    // and the tooltip shows exact values on tap.
+    const markerSettings = MarkerSettings(isVisible: false);
 
     final series = spec.isAreaChart
         ? <CartesianSeries<_DataPoint, DateTime>>[

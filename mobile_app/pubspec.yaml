@@ -12,7 +12,7 @@ dependencies:
   
   # atPlatform SDK
   at_client_flutter: ^1.1.1
-  at_client: 3.12.0-rc.1
+  at_client: 3.12.0-rc.2
   at_utils: ^3.0.0
 
   # UI components
@@ -34,13 +34,13 @@ dependencies:
 
 dependency_overrides:
   # Pin the prerelease at_client to get AtCollection API
-  at_client: 3.12.0-rc.1
+  at_client: 3.12.0-rc.2
   # Use forked flutter_keychain with V2 embedding support for Android builds
   # Comment this out when building for macOS to get keychain persistence
-  flutter_keychain:
-    git:
-      url: https://github.com/Al-Qaseh/flutter_keychain.git
-      ref: hot-fix/v1-embedding-deprecation
+  # flutter_keychain:
+  #   git:
+  #     url: https://github.com/Al-Qaseh/flutter_keychain.git
+  #     ref: hot-fix/v1-embedding-deprecation
 
 dev_dependencies:
   flutter_test:
