@@ -8,7 +8,7 @@ environment:
 
 dependencies:
   # atPlatform SDK
-  at_client: 3.12.0-rc.1
+  at_client: 3.12.0-rc.2
   at_onboarding_cli: ^1.15.0
   at_utils: ^3.0.0
   
@@ -25,7 +25,7 @@ dependencies:
     path: ../shared
 
 dependency_overrides:
-  at_client: 3.12.0-rc.1
+  at_client: 3.12.0-rc.2
 
 dev_dependencies:
   lints: ^3.0.0
