@@ -164,8 +164,7 @@ class AtService extends ChangeNotifier {
         eventSource: EventSource.notifs,
       );
 
-      logger.info(
-          'Collection opened — subscribing to raw stats notifications');
+      logger.info('Collection opened — subscribing to raw stats notifications');
 
       // Match every notification whose key is a stats.kryz collection item.
       // Shape: `<receiver>:<itemId>.stats.kryz@<sender>` — the leading `.`

@@ -26,7 +26,6 @@ class TransmitterProvider extends ChangeNotifier {
   // Sorted oldest→newest, maintained by background loader + live updates.
   final List<TransmitterStats> _historyCache = [];
   bool _historyCacheLoading = false;
-  bool _cacheLoaded = false;
   final _historyController =
       StreamController<List<TransmitterStats>>.broadcast();
   AtClient? _atClient;
@@ -81,34 +80,60 @@ class TransmitterProvider extends ChangeNotifier {
     }
   }
 
-  /// Background loader — reads all stats keys from Hive sequentially,
-  /// collecting into a local list then merging in one pass at the end.
+  /// Background loader — reads every cached stats key (raw / 5m / 1h tiers)
+  /// from Hive sequentially, collecting into a local list then merging in
+  /// one pass at the end.
   ///
-  /// Sequential reads with a yield every 10 keys ensures Flutter's event loop
-  /// can fire collection.updates callbacks between groups.  Future.wait(N)
-  /// drains as microtasks and blocks the event queue, silencing live events.
+  /// The regex matches all three namespaces in one scan and tolerates the
+  /// `cached:` prefix the SDK adds to receiver-side notification copies.
   ///
-  /// Protected by [_cacheLoaded]: runs only once per app session.
+  /// Sequential reads with a yield every 10 keys ensures Flutter's event
+  /// loop can fire notification callbacks between groups.
+  ///
+  /// May be called multiple times (e.g. once on startup, then again after
+  /// each sync completes) — `_historyCacheLoading` prevents overlapping
+  /// runs and `_cacheAdd` deduplicates new readings against the existing
+  /// cache, so repeat invocations are cheap and idempotent.
   Future<void> _loadHistoryCached() async {
-    if (_atClient == null || _historyCacheLoading || _cacheLoaded) return;
+    if (_atClient == null || _historyCacheLoading) return;
     _historyCacheLoading = true;
     try {
-      final keys = await _atClient!.getAtKeys(regex: r'stats\.kryz@');
+      // Matches:  [cached:][<receiver>:]<id>.stats[5m|1h].kryz@<sender>
+      final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
+      debugPrint('TransmitterProvider: history scan found ${keys.length} keys');
+      if (keys.isNotEmpty) {
+        debugPrint('  sample keys:');
+        for (final k in keys.take(5)) {
+          debugPrint('    ${k.toString()}');
+        }
+      }
+
       final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
       final incoming = <TransmitterStats>[];
+      var decoded = 0;
+      var nullValue = 0;
+      var decodeErr = 0;
 
       for (var i = 0; i < keys.length; i++) {
         try {
           final val = await _atClient!.get(keys[i]);
-          if (val.value != null) {
+          if (val.value == null) {
+            nullValue++;
+          } else {
             final env = jsonDecode(val.value as String) as Map<String, dynamic>;
             if (env['type'] == 'TransmitterStats') {
               final stats =
                   TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
+              decoded++;
               if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          decodeErr++;
+          if (decodeErr <= 3) {
+            debugPrint('  decode error for ${keys[i]}: $e');
+          }
+        }
         // Yield every 10 keys: forces a macrotask boundary so live events fire.
         if (i % 10 == 9) {
           await Future.delayed(Duration.zero);
@@ -116,8 +141,12 @@ class TransmitterProvider extends ChangeNotifier {
       }
       await Future.delayed(Duration.zero); // final yield
 
-      // Sort, deduplicate, merge with any live readings already in cache.
-      incoming.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      debugPrint('TransmitterProvider: decoded=$decoded nullValue=$nullValue '
+          'decodeErr=$decodeErr usable=${incoming.length} '
+          '(cacheBefore=${_historyCache.length})');
+
+      // Merge: keep existing cache entries (live) + incoming (historical),
+      // dedup on (transmitterId, timestamp).
       final seen = <String>{};
       final merged = <TransmitterStats>[];
       for (final s in [..._historyCache, ...incoming]) {
@@ -130,8 +159,8 @@ class TransmitterProvider extends ChangeNotifier {
         ..clear()
         ..addAll(merged);
 
-      _cacheLoaded = true;
-      // Single emit with the complete, sorted dataset.
+      debugPrint(
+          'TransmitterProvider: historyCache now has ${_historyCache.length} entries');
       if (!_historyController.isClosed) {
         _historyController.add(List.unmodifiable(_historyCache));
       }
@@ -158,18 +187,22 @@ class TransmitterProvider extends ChangeNotifier {
     // no getAtKeys regex scanning needed.
     _openTierCollections(atClient).ignore();
 
-    // After each sync, call getItems() on both tier collections as a
-    // fallback in case collection.updates silently drops an event.
+    // After each sync, refresh history from Hive — sync may have pulled
+    // new keys (raw / 5m / 1h tier) that the live notification stream
+    // would otherwise miss until the next aggregate roll-up.
     _syncListener = _ProviderSyncListener((progress) {
       if (progress.syncStatus == SyncStatus.success ||
           progress.syncStatus == SyncStatus.failure) {
+        debugPrint('TransmitterProvider: sync ${progress.syncStatus} → '
+            'refreshing history');
         _refreshTierCollections().ignore();
+        _loadHistoryCached().ignore();
       }
     });
     atClient.syncService.addProgressListener(_syncListener!);
 
-    // Load raw-tier keys already in Hive (up to 10 min old).
-    if (!_cacheLoaded) _loadHistoryCached().ignore();
+    // Initial Hive scan — picks up anything cached from prior sessions.
+    _loadHistoryCached().ignore();
   }
 
   /// Open the 5-minute and 1-hour tier collections.  Live updates come
