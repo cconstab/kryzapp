@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -310,7 +311,7 @@ Color _alertColorFromConfig(double? value, GaugeConfig cfg) {
   return Colors.green;
 }
 
-class _MetricCard extends StatelessWidget {
+class _MetricCard extends StatefulWidget {
   const _MetricCard({
     required this.spec,
     required this.data,
@@ -322,19 +323,159 @@ class _MetricCard extends StatelessWidget {
   final _Window window;
 
   @override
+  State<_MetricCard> createState() => _MetricCardState();
+}
+
+class _MetricCardState extends State<_MetricCard> {
+  // Mutable chart data — mutated in place for incremental appends so that
+  // Syncfusion can update only the changed points via [_ctrl.updateDataSource]
+  // without rebuilding the full series.
+  late List<_DataPoint> _chartPoints;
+  ChartSeriesController? _ctrl;
+  StreamSubscription<TransmitterStats>? _liveSub;
+
+  // Axis bounds kept in state so they can be refreshed on each live point
+  // without recomputing the full _injectGaps dataset.
+  late DateTime _windowStart;
+  late DateTime _windowEnd;
+
+  // Most-recent metric value — updated cheaply on each live reading.
+  double? _latestValue;
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+
+  @override
+  void initState() {
+    super.initState();
+    _rebuildFull(widget.data);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Re-subscribe whenever the provider instance changes (e.g. re-auth).
+    _liveSub?.cancel();
+    final provider =
+        Provider.of<TransmitterProvider>(context, listen: false);
+    _liveSub = provider.liveStream.listen(_onLivePoint);
+  }
+
+  @override
+  void didUpdateWidget(_MetricCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Rebuild from the full data list whenever the window or the backing
+    // dataset changes (triggered by historyStream bulk events: initial load,
+    // sync completion, tier-collection refresh).  Live 2-second readings
+    // arrive via _liveStream and are handled incrementally in _onLivePoint.
+    if (oldWidget.window != widget.window ||
+        !identical(oldWidget.data, widget.data)) {
+      _rebuildFull(widget.data);
+    }
+  }
+
+  @override
+  void dispose() {
+    _liveSub?.cancel();
+    super.dispose();
+  }
+
+  // ── Data helpers ───────────────────────────────────────────────────────────
+
+  /// Full rebuild of [_chartPoints] from [data].  Called on initial load and
+  /// after bulk history events.  [_injectGaps] is only ever called here —
+  /// live appends avoid it entirely.
+  void _rebuildFull(List<TransmitterStats> data) {
+    final now = DateTime.now();
+    _windowStart = now.subtract(widget.window.duration);
+    _windowEnd = now;
+    // Re-filter with the same 'now' used for the axis bounds (same logic as
+    // the old StatelessWidget build, prevents the "folds over itself" artifact).
+    final windowed =
+        data.where((s) => !s.timestamp.isBefore(_windowStart)).toList();
+    _chartPoints = _injectGaps(windowed, widget.spec.extract, widget.window);
+    _latestValue = windowed.isNotEmpty ? widget.spec.extract(windowed.last) : null;
+  }
+
+  /// Incremental live-append handler.  Called every ~2 seconds for each new
+  /// raw reading.  Old data points are immutable so we only need to:
+  ///   1. Trim the oldest points that have scrolled outside the window.
+  ///   2. Possibly insert a gap sentinel if a break in the data is detected.
+  ///   3. Append the new point.
+  /// Then tell Syncfusion exactly which indexes changed so it can update the
+  /// canvas without re-rendering the entire series.
+  void _onLivePoint(TransmitterStats stats) {
+    final now = DateTime.now();
+    final cutoff = now.subtract(widget.window.duration);
+
+    // Drop points outside the current window.
+    if (stats.timestamp.isBefore(cutoff)) return;
+
+    // Drop out-of-order readings (e.g. a delayed notification arriving after
+    // a more recent one has already been appended).  They will appear on the
+    // next full rebuild triggered by the tier-notification or sync cycle.
+    final lastReal =
+        _chartPoints.lastWhere((p) => p.value != null, orElse: () => _DataPoint(cutoff, null));
+    if (lastReal.value != null && stats.timestamp.isBefore(lastReal.time)) {
+      return;
+    }
+
+    // ── Trim expired points from the front ──────────────────────────────────
+    int trimCount = 0;
+    while (trimCount < _chartPoints.length &&
+        _chartPoints[trimCount].time.isBefore(cutoff)) {
+      trimCount++;
+    }
+    final removedIndexes =
+        trimCount > 0 ? List.generate(trimCount, (i) => i) : <int>[];
+    if (trimCount > 0) _chartPoints.removeRange(0, trimCount);
+
+    // ── Append new point (with gap sentinel if needed) ──────────────────────
+    final toAdd = <_DataPoint>[];
+    final lastNonNull =
+        _chartPoints.lastWhere((p) => p.value != null, orElse: () => _DataPoint(cutoff, null));
+    if (lastNonNull.value != null) {
+      final gap = stats.timestamp.difference(lastNonNull.time);
+      if (gap > _gapThresholdForWindow(widget.window)) {
+        toAdd.add(
+            _DataPoint(lastNonNull.time.add(const Duration(seconds: 1)), null));
+      }
+    }
+    toAdd.add(_DataPoint(stats.timestamp, widget.spec.extract(stats)));
+
+    final addedStartIdx = _chartPoints.length;
+    _chartPoints.addAll(toAdd);
+    final addedIndexes =
+        List.generate(toAdd.length, (i) => addedStartIdx + i);
+
+    _latestValue = widget.spec.extract(stats);
+
+    // Update axis bounds and header value (setState); tell Syncfusion about
+    // the changed data indexes (updateDataSource — no full re-render).
+    setState(() {
+      _windowStart = cutoff;
+      _windowEnd = now;
+    });
+    _ctrl?.updateDataSource(
+      addedDataIndexes: addedIndexes.isEmpty ? null : addedIndexes,
+      removedDataIndexes: removedIndexes.isEmpty ? null : removedIndexes,
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
   Widget build(BuildContext context) {
     // Thresholds come from ConfigService (user-configurable, synced via atProtocol)
     // so they always match the gauge screen — no hardcoding here.
     final cfg = Provider.of<ConfigService>(context, listen: false)
         .config
-        .getConfig(spec.configKey);
+        .getConfig(widget.spec.configKey);
 
-    final latest = data.isNotEmpty ? spec.extract(data.last) : null;
     final latestStr =
-        latest != null ? '${latest.toStringAsFixed(1)} ${cfg.unit}' : '—';
+        _latestValue != null ? '${_latestValue!.toStringAsFixed(1)} ${cfg.unit}' : '—';
 
     // Alert status for the current reading — drives card border + value colour.
-    final alertColor = _alertColorFromConfig(latest, cfg);
+    final alertColor = _alertColorFromConfig(_latestValue, cfg);
 
     // Threshold lines: a 1.5 px line at each threshold value.
     // Only visible when the auto-scaled Y axis includes the threshold,
@@ -370,51 +511,39 @@ class _MetricCard extends StatelessWidget {
         ),
     ];
 
-    // Always span the full selected window so the axis reads correctly even
-    // when there is no data or data only covers part of the window.
-    final now = DateTime.now();
-    final windowStart = now.subtract(window.duration);
-
-    // Re-filter with the same 'now' used for the axis minimum/maximum.
-    // historyStream() computes its cutoff slightly earlier than this build
-    // runs, so a point can slip through the stream filter but land before
-    // axis.minimum — causing Syncfusion to clip it to the left edge and
-    // draw a backward line ("folds over itself").
-    final windowedData =
-        data.where((s) => !s.timestamp.isBefore(windowStart)).toList();
-
-    // Inject null sentinels at gaps so the chart shows a visible break
-    // instead of a misleading diagonal line across the outage period.
-    final points = _injectGaps(windowedData, spec.extract, window);
-
     // Marker settings — always hidden; line charts look cleaner without dots
     // and the tooltip shows exact values on tap.
     const markerSettings = MarkerSettings(isVisible: false);
 
-    final series = spec.isAreaChart
+    // _chartPoints is the mutable list maintained by _rebuildFull / _onLivePoint.
+    // Passing the same list reference on every build lets Syncfusion detect
+    // that no full re-render is needed when only updateDataSource was called.
+    final series = widget.spec.isAreaChart
         ? <CartesianSeries<_DataPoint, DateTime>>[
             AreaSeries<_DataPoint, DateTime>(
-              dataSource: points,
+              dataSource: _chartPoints,
               xValueMapper: (p, _) => p.time,
               yValueMapper: (p, _) => p.value,
               emptyPointSettings:
                   const EmptyPointSettings(mode: EmptyPointMode.gap),
-              color: spec.color.withValues(alpha: 0.4),
-              borderColor: spec.color,
+              color: widget.spec.color.withValues(alpha: 0.4),
+              borderColor: widget.spec.color,
               borderWidth: 2,
               markerSettings: markerSettings,
+              onRendererCreated: (ctrl) => _ctrl = ctrl,
             ),
           ]
         : <CartesianSeries<_DataPoint, DateTime>>[
             LineSeries<_DataPoint, DateTime>(
-              dataSource: points,
+              dataSource: _chartPoints,
               xValueMapper: (p, _) => p.time,
               yValueMapper: (p, _) => p.value,
               emptyPointSettings:
                   const EmptyPointSettings(mode: EmptyPointMode.gap),
-              color: spec.color,
+              color: widget.spec.color,
               width: 2,
               markerSettings: markerSettings,
+              onRendererCreated: (ctrl) => _ctrl = ctrl,
             ),
           ];
 
@@ -434,14 +563,14 @@ class _MetricCard extends StatelessWidget {
                   width: 12,
                   height: 12,
                   decoration: BoxDecoration(
-                    color: spec.color,
+                    color: widget.spec.color,
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    spec.title,
+                    widget.spec.title,
                     style: Theme.of(context)
                         .textTheme
                         .titleSmall
@@ -464,12 +593,12 @@ class _MetricCard extends StatelessWidget {
                 plotAreaBorderWidth: 0,
                 primaryXAxis: DateTimeAxis(
                   isVisible: true,
-                  minimum: windowStart,
-                  maximum: now,
+                  minimum: _windowStart,
+                  maximum: _windowEnd,
                   majorGridLines: const MajorGridLines(
                       width: 0.3, color: Color(0x33888888)),
                   axisLine: const AxisLine(width: 0),
-                  dateFormat: _dateFormatFor(window),
+                  dateFormat: _dateFormatFor(widget.window),
                   desiredIntervals: 5,
                   labelRotation: -35,
                   labelStyle: const TextStyle(fontSize: 9),
@@ -490,7 +619,7 @@ class _MetricCard extends StatelessWidget {
                 ),
                 tooltipBehavior: TooltipBehavior(
                   enable: true,
-                  header: spec.title,
+                  header: widget.spec.title,
                   format: 'point.x : point.y ${cfg.unit}',
                 ),
                 series: series,

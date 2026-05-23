@@ -28,6 +28,17 @@ class TransmitterProvider extends ChangeNotifier {
   bool _historyCacheLoading = false;
   final _historyController =
       StreamController<List<TransmitterStats>>.broadcast();
+
+  // Live stream — emits individual new readings once history is fully loaded.
+  // Chart widgets subscribe here for incremental appends so they don't need
+  // to rebuild the full dataset on every 2-second raw reading.
+  final _liveController = StreamController<TransmitterStats>.broadcast();
+
+  // Set to true after the first _loadHistoryCached completes.  Until then,
+  // every _cacheAdd emits a full snapshot via _historyController so charts
+  // populate correctly during the initial catch-up sweep.
+  bool _historyLoaded = false;
+
   AtClient? _atClient;
 
   // Tier collections — used only for the catch-up `getItems()` sweep that
@@ -57,10 +68,24 @@ class TransmitterProvider extends ChangeNotifier {
   bool get isHealthy => _currentStats?.isHealthy ?? false;
   String? get alertLevel => _currentStats?.alertLevel;
 
-  /// Insert [stats] into the sorted in-memory cache and push an update to the
-  /// history stream.  Safe to call from any context (background loader or
-  /// live-reading callback).
-  void _cacheAdd(TransmitterStats stats) {
+  /// Single-point updates for chart widgets to append incrementally.
+  /// Only populated after the initial history load completes.
+  Stream<TransmitterStats> get liveStream => _liveController.stream;
+
+  /// Insert [stats] into the sorted in-memory cache and optionally emit an
+  /// update.
+  ///
+  /// [live] — true for real-time single readings (raw 2-second stats from the
+  ///   collector).  Once the initial history load is complete these are emitted
+  ///   via [_liveController] so chart widgets can append a single point without
+  ///   rebuilding the entire dataset.  Before history is loaded they fall back
+  ///   to a full snapshot so the chart is not stuck empty.
+  ///
+  /// [broadcast] — false suppresses any emission; callers that process many
+  ///   items in a loop (e.g. [_refreshTierCollections]) set this to false and
+  ///   emit one snapshot at the end, avoiding N consecutive full-list broadcasts.
+  void _cacheAdd(TransmitterStats stats,
+      {bool live = false, bool broadcast = true}) {
     final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
     _historyCache.removeWhere((s) => s.timestamp.isBefore(cutoff7d));
     // Skip exact duplicates (same transmitter, same timestamp).
@@ -74,9 +99,15 @@ class TransmitterProvider extends ChangeNotifier {
     } else {
       _historyCache.insert(idx, stats);
     }
-    // Push a snapshot to any open StreamBuilders.
-    if (!_historyController.isClosed) {
-      _historyController.add(List.unmodifiable(_historyCache));
+    if (!broadcast) return;
+    if (live && _historyLoaded) {
+      // History is stable — emit just this point so charts append incrementally.
+      if (!_liveController.isClosed) _liveController.add(stats);
+    } else {
+      // During initial load or tier catch-up: emit the full sorted snapshot.
+      if (!_historyController.isClosed) {
+        _historyController.add(List.unmodifiable(_historyCache));
+      }
     }
   }
 
@@ -161,6 +192,10 @@ class TransmitterProvider extends ChangeNotifier {
 
       debugPrint(
           'TransmitterProvider: historyCache now has ${_historyCache.length} entries');
+      // Mark history as loaded before broadcasting so that any live readings
+      // that arrive from here on are routed to _liveController instead of
+      // triggering another full-snapshot broadcast.
+      _historyLoaded = true;
       if (!_historyController.isClosed) {
         _historyController.add(List.unmodifiable(_historyCache));
       }
@@ -284,19 +319,27 @@ class TransmitterProvider extends ChangeNotifier {
   /// Full sweep of both tier collections — reads every item from Hive and
   /// merges into the cache.  [_cacheAdd] deduplicates so this is safe to
   /// call multiple times and won't produce duplicate chart points.
+  ///
+  /// All items are inserted with [broadcast:false] so that chart widgets
+  /// receive a single full-snapshot update at the end instead of one
+  /// snapshot per item (which could be hundreds of updates per sync cycle).
   Future<void> _refreshTierCollections() async {
     try {
       if (_fiveMinColl != null) {
         final items = await _fiveMinColl!.getItems();
         for (final CItem<TransmitterStats> item in items) {
-          _cacheAdd(item.obj);
+          _cacheAdd(item.obj, broadcast: false);
         }
       }
       if (_oneHourColl != null) {
         final items = await _oneHourColl!.getItems();
         for (final CItem<TransmitterStats> item in items) {
-          _cacheAdd(item.obj);
+          _cacheAdd(item.obj, broadcast: false);
         }
+      }
+      // One broadcast after all items are merged.
+      if (!_historyController.isClosed) {
+        _historyController.add(List.unmodifiable(_historyCache));
       }
     } catch (e) {
       debugPrint('TransmitterProvider._refreshTierCollections error: $e');
@@ -334,7 +377,9 @@ class TransmitterProvider extends ChangeNotifier {
     }
 
     // Add to the long-term history cache so charts include this reading.
-    _cacheAdd(stats);
+    // live:true routes this through _liveController once history is loaded,
+    // so chart widgets can append just the new point incrementally.
+    _cacheAdd(stats, live: true);
 
     notifyListeners();
   }
@@ -370,6 +415,7 @@ class TransmitterProvider extends ChangeNotifier {
       _atClient!.syncService.removeProgressListener(_syncListener!);
     }
     _historyController.close();
+    _liveController.close();
     super.dispose();
   }
 
