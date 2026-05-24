@@ -49,6 +49,8 @@ void main(List<String> arguments) async {
     final minLevel = verbose ? Level.FINE : Level.SEVERE;
     if (record.level < minLevel) return;
     print('${record.level.name}: ${record.time}: ${record.message}');
+    if (record.error != null) print('  Error: ${record.error}');
+    if (record.stackTrace != null) print('  ${record.stackTrace}');
   });
 
   final logger = Logger('main');

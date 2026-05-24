@@ -124,10 +124,26 @@ class SNMPCollector {
     // Initial collection
     await _collectAndPersist();
 
-    // Set up periodic polling
+    // Set up periodic polling.
+    // _isBusy prevents a new cycle from starting while the previous async
+    // write is still in flight (e.g. when the atServer is slow to respond).
+    // Without this guard, timed-out writes pile up concurrently and can
+    // exhaust the SDK connection pool.
+    bool _isBusy = false;
     _pollTimer = Timer.periodic(
       Duration(seconds: pollIntervalSeconds),
-      (_) => _collectAndPersist(),
+      (_) async {
+        if (_isBusy) {
+          logger.warning('Previous collection cycle still running — skipping tick');
+          return;
+        }
+        _isBusy = true;
+        try {
+          await _collectAndPersist();
+        } finally {
+          _isBusy = false;
+        }
+      },
     );
   }
 
