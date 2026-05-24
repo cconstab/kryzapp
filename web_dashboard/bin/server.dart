@@ -680,9 +680,18 @@ function applyConfig(d) {
 }
 
 
-// Gap threshold = 3× the median inter-reading interval, derived from the data.
-// Stored as a rolling ring buffer so it adapts when the poll interval changes
-// without any code change.
+// ── Gap detection ─────────────────────────────────────────────────────────────
+// The cache mixes raw (2 s), 5-min and 1-hour tier data.  Using a dynamic
+// median-based threshold fails because the dense raw tier dominates the
+// distribution (median ≈ 2 s → threshold ≈ 6 s), turning every 5-min gap
+// between 5-min-tier readings into a false "outage" break.
+//
+// Instead we use a fixed per-window threshold that mirrors the mobile app's
+// _gapThresholdForWindow:
+//   ≤ 24 h window → 10 min  (catches real outages; ignores raw-tier density)
+//    > 24 h window → 2 h    (catches real outages in 1-hour-tier data)
+
+// Rolling ring buffer — used ONLY for live appendReading gap detection.
 const _recentIntervals = [];
 const _MAX_INTERVALS = 30;
 
@@ -698,20 +707,18 @@ function _gapThreshold(intervals) {
   return sorted[Math.floor(sorted.length / 2)] * 3;
 }
 
+// Fixed window-aware threshold for history batches (matches mobile app).
+function _gapThresholdForWindow(windowSecs) {
+  return (windowSecs <= 86400 ? 10 * 60 : 2 * 60 * 60) * 1000; // ms
+}
+
 // Inject {x, y:null} sentinels into a batch of history readings so Chart.js
-// draws a visible break over outage periods.  Also seeds the ring buffer.
-function injectGaps(readings, key) {
+// draws a visible break over real outage periods.
+function injectGaps(readings, key, windowSecs) {
+  const threshold = _gapThresholdForWindow(windowSecs ?? currentWindow);
   if (readings.length < 2) {
     return readings.map(r => ({x: new Date(r.timestamp), y: r[key]}));
   }
-  // Collect all intervals; seed the ring buffer with the most recent ones.
-  const allMs = [];
-  for (let i = 1; i < readings.length; i++) {
-    const ms = new Date(readings[i].timestamp) - new Date(readings[i - 1].timestamp);
-    if (ms > 0) allMs.push(ms);
-  }
-  for (const ms of allMs.slice(-_MAX_INTERVALS)) _addInterval(ms);
-  const threshold = _gapThreshold(allMs);
   const result = [];
   for (let i = 0; i < readings.length; i++) {
     if (i > 0) {
@@ -776,7 +783,7 @@ function applyReadings(readings) {
   if (windowed.length === 0) return;
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
-    ds.data = injectGaps(windowed, m.key);
+    ds.data = injectGaps(windowed, m.key, currentWindow);
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');

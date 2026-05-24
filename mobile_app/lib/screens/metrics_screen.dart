@@ -355,8 +355,7 @@ class _MetricCardState extends State<_MetricCard> {
     super.didChangeDependencies();
     // Re-subscribe whenever the provider instance changes (e.g. re-auth).
     _liveSub?.cancel();
-    final provider =
-        Provider.of<TransmitterProvider>(context, listen: false);
+    final provider = Provider.of<TransmitterProvider>(context, listen: false);
     _liveSub = provider.liveStream.listen(_onLivePoint);
   }
 
@@ -393,7 +392,8 @@ class _MetricCardState extends State<_MetricCard> {
     final windowed =
         data.where((s) => !s.timestamp.isBefore(_windowStart)).toList();
     _chartPoints = _injectGaps(windowed, widget.spec.extract, widget.window);
-    _latestValue = windowed.isNotEmpty ? widget.spec.extract(windowed.last) : null;
+    _latestValue =
+        windowed.isNotEmpty ? widget.spec.extract(windowed.last) : null;
   }
 
   /// Incremental live-append handler.  Called every ~2 seconds for each new
@@ -413,8 +413,8 @@ class _MetricCardState extends State<_MetricCard> {
     // Drop out-of-order readings (e.g. a delayed notification arriving after
     // a more recent one has already been appended).  They will appear on the
     // next full rebuild triggered by the tier-notification or sync cycle.
-    final lastReal =
-        _chartPoints.lastWhere((p) => p.value != null, orElse: () => _DataPoint(cutoff, null));
+    final lastReal = _chartPoints.lastWhere((p) => p.value != null,
+        orElse: () => _DataPoint(cutoff, null));
     if (lastReal.value != null && stats.timestamp.isBefore(lastReal.time)) {
       return;
     }
@@ -431,8 +431,8 @@ class _MetricCardState extends State<_MetricCard> {
 
     // ── Append new point (with gap sentinel if needed) ──────────────────────
     final toAdd = <_DataPoint>[];
-    final lastNonNull =
-        _chartPoints.lastWhere((p) => p.value != null, orElse: () => _DataPoint(cutoff, null));
+    final lastNonNull = _chartPoints.lastWhere((p) => p.value != null,
+        orElse: () => _DataPoint(cutoff, null));
     if (lastNonNull.value != null) {
       final gap = stats.timestamp.difference(lastNonNull.time);
       if (gap > _gapThresholdForWindow(widget.window)) {
@@ -444,8 +444,7 @@ class _MetricCardState extends State<_MetricCard> {
 
     final addedStartIdx = _chartPoints.length;
     _chartPoints.addAll(toAdd);
-    final addedIndexes =
-        List.generate(toAdd.length, (i) => addedStartIdx + i);
+    final addedIndexes = List.generate(toAdd.length, (i) => addedStartIdx + i);
 
     _latestValue = widget.spec.extract(stats);
 
@@ -471,8 +470,9 @@ class _MetricCardState extends State<_MetricCard> {
         .config
         .getConfig(widget.spec.configKey);
 
-    final latestStr =
-        _latestValue != null ? '${_latestValue!.toStringAsFixed(1)} ${cfg.unit}' : '—';
+    final latestStr = _latestValue != null
+        ? '${_latestValue!.toStringAsFixed(1)} ${cfg.unit}'
+        : '—';
 
     // Alert status for the current reading — drives card border + value colour.
     final alertColor = _alertColorFromConfig(_latestValue, cfg);

@@ -134,7 +134,8 @@ class SNMPCollector {
       Duration(seconds: pollIntervalSeconds),
       (_) async {
         if (_isBusy) {
-          logger.warning('Previous collection cycle still running — skipping tick');
+          logger.warning(
+              'Previous collection cycle still running — skipping tick');
           return;
         }
         _isBusy = true;
