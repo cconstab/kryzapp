@@ -189,6 +189,37 @@ class MetricsScreen extends StatelessWidget {
               builder: (context, atService, _) =>
                   _SyncStatusBar(sync: atService.latestSync),
             ),
+            // History load progress bar — only visible while loading.
+            Consumer<TransmitterProvider>(
+              builder: (context, provider, _) =>
+                  ValueListenableBuilder<double?>(
+                valueListenable: provider.historyLoadProgress,
+                builder: (context, progress, _) {
+                  if (progress == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 4),
+                        LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 3,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2, bottom: 2),
+                          child: Text(
+                            'Loading history… ${(progress * 100).round()}%',
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
             Expanded(
               child: TabBarView(
                 children: [
@@ -531,29 +562,29 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
         PlotBand(
           start: cfg.warningHighThreshold,
           end: cfg.warningHighThreshold,
-          borderColor: Colors.orange.withValues(alpha: 0.8),
-          borderWidth: 1.5,
+          borderColor: Colors.orange.withValues(alpha: 0.35),
+          borderWidth: 1,
         ),
       if (cfg.criticalHighThreshold != null)
         PlotBand(
           start: cfg.criticalHighThreshold,
           end: cfg.criticalHighThreshold,
-          borderColor: Colors.red.withValues(alpha: 0.8),
-          borderWidth: 1.5,
+          borderColor: Colors.red.withValues(alpha: 0.35),
+          borderWidth: 1,
         ),
       if (cfg.warningLowThreshold != null)
         PlotBand(
           start: cfg.warningLowThreshold,
           end: cfg.warningLowThreshold,
-          borderColor: Colors.orange.withValues(alpha: 0.8),
-          borderWidth: 1.5,
+          borderColor: Colors.orange.withValues(alpha: 0.35),
+          borderWidth: 1,
         ),
       if (cfg.criticalLowThreshold != null)
         PlotBand(
           start: cfg.criticalLowThreshold,
           end: cfg.criticalLowThreshold,
-          borderColor: Colors.red.withValues(alpha: 0.8),
-          borderWidth: 1.5,
+          borderColor: Colors.red.withValues(alpha: 0.35),
+          borderWidth: 1,
         ),
     ];
 
@@ -626,6 +657,8 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
                 ),
                 primaryYAxis: NumericAxis(
                   isVisible: true,
+                  minimum: cfg.minValue,
+                  maximum: cfg.maxValue,
                   plotBands: plotBands,
                   axisLine: const AxisLine(width: 0),
                   majorTickLines: const MajorTickLines(size: 0),

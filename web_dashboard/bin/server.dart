@@ -138,6 +138,8 @@ Map<String, dynamic> _configPayload(DashboardConfig cfg) {
       'stationName': cfg.stationName,
       'thresholds': cfg.gauges.map((key, g) => MapEntry(key, {
             'unit': g.unit,
+            'minVal': g.minValue,
+            'maxVal': g.maxValue,
             'warnHigh': g.warningHighThreshold,
             'critHigh': g.criticalHighThreshold,
             'warnLow': g.warningLowThreshold,
@@ -361,6 +363,8 @@ void main(List<String> arguments) async {
     atClient.syncService.addProgressListener(_SyncProgressBroadcaster());
 
     Future<void> loadAndBroadcastConfig() async {
+      final previousJson =
+          _lastConfigPayload != null ? jsonEncode(_lastConfigPayload) : null;
       try {
         final key = AtKey()
           ..key = 'kryz_dashboard_config'
@@ -379,15 +383,28 @@ void main(List<String> arguments) async {
         _lastConfigPayload = _configPayload(DashboardConfig.defaults());
         _log.warning('Could not load DashboardConfig: $e — using defaults');
       }
-      _broadcast(_lastConfigPayload!);
+      // Only broadcast when the config has actually changed.
+      final newJson = jsonEncode(_lastConfigPayload);
+      if (newJson != previousJson) {
+        _log.info('Config changed — broadcasting to clients');
+        _broadcast(_lastConfigPayload!);
+      }
     }
 
     await loadAndBroadcastConfig();
+    // Always send the config on first load regardless of change detection.
+    if (_lastConfigPayload != null) _broadcast(_lastConfigPayload!);
 
     atClient.notificationService
         .subscribe(regex: '.*kryz_dashboard_config.*', shouldDecrypt: true)
         .listen((_) async {
       _log.info('Config change notification received — reloading');
+      await loadAndBroadcastConfig();
+    });
+
+    // Periodic safety-net poll: re-check config every 5 minutes and
+    // broadcast only if it changed (handles missed notifications).
+    Timer.periodic(const Duration(minutes: 5), (_) async {
       await loadAndBroadcastConfig();
     });
 
@@ -493,6 +510,7 @@ const _dashboardHtml = r'''
 <title>KRYZ Transmitter Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:12px}
@@ -552,12 +570,12 @@ const _dashboardHtml = r'''
 
 <script>
 const METRICS = [
-  {key:'modulation',label:'Modulation',        unit:'%',   color:'#4CAF50', warnLow:60,  critLow:50,  warnHigh:104, critHigh:105},
-  {key:'swr',       label:'SWR',               unit:':1',  color:'#FF9800',                           warnHigh:1.8, critHigh:3.0},
-  {key:'powerOut',  label:'Power Out',          unit:'W',   color:'#2196F3', warnLow:80,  critLow:50},
-  {key:'powerRef',  label:'Power Reflected',    unit:'W',   color:'#E53935',                           warnHigh:10,  critHigh:20},
-  {key:'heatTemp',  label:'Heat Sink Temp',     unit:'°C',  color:'#F44336',                           warnHigh:75,  critHigh:90},
-  {key:'fanSpeed',  label:'Fan Speed',          unit:'RPM', color:'#9C27B0'},
+  {key:'modulation',label:'Modulation',        unit:'%',   color:'#4CAF50', minVal:0,   maxVal:120,   warnLow:60,  critLow:50,  warnHigh:104, critHigh:105},
+  {key:'swr',       label:'SWR',               unit:':1',  color:'#FF9800', minVal:1,   maxVal:3.5,                            warnHigh:1.8, critHigh:3.0},
+  {key:'powerOut',  label:'Power Out',          unit:'W',   color:'#2196F3', minVal:0,   maxVal:20,    warnLow:8,   critLow:5},
+  {key:'powerRef',  label:'Power Reflected',    unit:'W',   color:'#E53935', minVal:0,   maxVal:5,                              warnHigh:1.0, critHigh:2.0},
+  {key:'heatTemp',  label:'Heat Sink Temp',     unit:'°C',  color:'#F44336', minVal:0,   maxVal:100,                            warnHigh:75,  critHigh:90},
+  {key:'fanSpeed',  label:'Fan Speed',          unit:'RPM', color:'#9C27B0', minVal:0,   maxVal:10000},
 ];
 
 const charts = {};
@@ -585,6 +603,29 @@ function _meterClass(m, v) {
 
 // Returns the hex colour that matches the alert state for a metric value.
 // Used to colour both meter cards and chart lines consistently.
+// Returns Chart.js annotation objects for the threshold lines of a metric.
+// Lines are thin and semi-transparent to avoid obscuring the chart data.
+function _buildThresholdAnnotations(m) {
+  const anns = {};
+  if (m.warnHigh !== undefined) anns.wH = {
+    type:'line', scaleID:'y', value:m.warnHigh,
+    borderColor:'rgba(255,152,0,0.35)', borderWidth:1, borderDash:[4,4],
+  };
+  if (m.critHigh !== undefined) anns.cH = {
+    type:'line', scaleID:'y', value:m.critHigh,
+    borderColor:'rgba(229,57,53,0.35)', borderWidth:1, borderDash:[4,4],
+  };
+  if (m.warnLow !== undefined) anns.wL = {
+    type:'line', scaleID:'y', value:m.warnLow,
+    borderColor:'rgba(255,152,0,0.35)', borderWidth:1, borderDash:[4,4],
+  };
+  if (m.critLow !== undefined) anns.cL = {
+    type:'line', scaleID:'y', value:m.critLow,
+    borderColor:'rgba(229,57,53,0.35)', borderWidth:1, borderDash:[4,4],
+  };
+  return anns;
+}
+
 function _alertChartColor(m, v) {
   const cls = _meterClass(m, v);
   if (cls === 'm-crit') return '#E53935';
@@ -651,6 +692,8 @@ for (const m of METRICS) {
           ticks: {color:'#aaa', maxTicksLimit:6},
         },
         y: {
+          min: m.minVal,
+          max: m.maxVal,
           grid: {color:'#333'},
           ticks: {color:'#aaa'},
         },
@@ -663,6 +706,9 @@ for (const m of METRICS) {
           backgroundColor: 'rgba(0,0,0,0.85)',
           titleColor: '#fff',
           bodyColor: '#aaa',
+        },
+        annotation: {
+          annotations: _buildThresholdAnnotations(m),
         },
       },
     },
@@ -680,10 +726,15 @@ function applyConfig(d) {
     const t = d.thresholds[m.key];
     if (!t) continue;
     if (t.unit     !== undefined) m.unit     = t.unit;
+    if (t.minVal  !== undefined) { m.minVal  = t.minVal;  charts[m.key].options.scales.y.min = t.minVal; }
+    if (t.maxVal  !== undefined) { m.maxVal  = t.maxVal;  charts[m.key].options.scales.y.max = t.maxVal; }
     if (t.warnHigh !== undefined) m.warnHigh = t.warnHigh;
     if (t.critHigh !== undefined) m.critHigh = t.critHigh;
     if (t.warnLow  !== undefined) m.warnLow  = t.warnLow;
     if (t.critLow  !== undefined) m.critLow  = t.critLow;
+    // Rebuild threshold annotations from updated values.
+    charts[m.key].options.plugins.annotation.annotations = _buildThresholdAnnotations(m);
+    charts[m.key].update('none');
   }
   // Refresh meter colours with current data if we already have a reading.
   if (_lastReading) updateMeters(_lastReading);

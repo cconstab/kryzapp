@@ -39,6 +39,11 @@ class TransmitterProvider extends ChangeNotifier {
   // populate correctly during the initial catch-up sweep.
   bool _historyLoaded = false;
 
+  // Progress of the current history load: null = idle, 0.0–1.0 = loading.
+  // Uses a ValueNotifier so the progress bar can update cheaply without
+  // triggering full widget-tree rebuilds via notifyListeners().
+  final historyLoadProgress = ValueNotifier<double?>(null);
+
   AtClient? _atClient;
 
   // Tier collections — used only for the catch-up `getItems()` sweep that
@@ -128,6 +133,7 @@ class TransmitterProvider extends ChangeNotifier {
   Future<void> _loadHistoryCached() async {
     if (_atClient == null || _historyCacheLoading) return;
     _historyCacheLoading = true;
+    historyLoadProgress.value = 0.0;
     try {
       // Matches:  [cached:][<receiver>:]<id>.stats[5m|1h].kryz@<sender>
       final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
@@ -145,32 +151,57 @@ class TransmitterProvider extends ChangeNotifier {
       var nullValue = 0;
       var decodeErr = 0;
 
-      for (var i = 0; i < keys.length; i++) {
-        try {
-          final val = await _atClient!.get(keys[i]);
+      // Fetch keys in parallel batches to avoid hundreds of serial Hive
+      // round-trips, which is the main cause of slow 7-day history loading.
+      // A batch of 20 is large enough to amortise per-call overhead but small
+      // enough that we yield between batches and live notifications still fire.
+      const batchSize = 20;
+      for (var i = 0; i < keys.length; i += batchSize) {
+        final batch = keys.sublist(i, (i + batchSize).clamp(0, keys.length));
+        final results = await Future.wait(
+          batch.map((key) async {
+            try {
+              return await _atClient!.get(key);
+            } catch (e) {
+              return null;
+            }
+          }),
+        );
+        for (var j = 0; j < batch.length; j++) {
+          final val = results[j];
+          if (val == null) {
+            decodeErr++;
+            if (decodeErr <= 3) {
+              debugPrint('  get error for ${batch[j]}');
+            }
+            continue;
+          }
           if (val.value == null) {
             nullValue++;
           } else {
-            final env = jsonDecode(val.value as String) as Map<String, dynamic>;
-            if (env['type'] == 'TransmitterStats') {
-              final stats =
-                  TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
-              decoded++;
-              if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
+            try {
+              final env =
+                  jsonDecode(val.value as String) as Map<String, dynamic>;
+              if (env['type'] == 'TransmitterStats') {
+                final stats = TransmitterStats.fromJson(
+                    env['obj'] as Map<String, dynamic>);
+                decoded++;
+                if (stats.timestamp.isAfter(cutoff7d)) incoming.add(stats);
+              }
+            } catch (e) {
+              decodeErr++;
+              if (decodeErr <= 3) {
+                debugPrint('  decode error for ${batch[j]}: $e');
+              }
             }
           }
-        } catch (e) {
-          decodeErr++;
-          if (decodeErr <= 3) {
-            debugPrint('  decode error for ${keys[i]}: $e');
-          }
         }
-        // Yield every 10 keys: forces a macrotask boundary so live events fire.
-        if (i % 10 == 9) {
-          await Future.delayed(Duration.zero);
-        }
+        // Yield between batches so live notification callbacks can fire.
+        await Future.delayed(Duration.zero);
+        // Report progress (clamp to avoid floating-point overshoot).
+        historyLoadProgress.value =
+            ((i + batchSize) / keys.length).clamp(0.0, 1.0);
       }
-      await Future.delayed(Duration.zero); // final yield
 
       debugPrint('TransmitterProvider: decoded=$decoded nullValue=$nullValue '
           'decodeErr=$decodeErr usable=${incoming.length} '
@@ -203,6 +234,7 @@ class TransmitterProvider extends ChangeNotifier {
       debugPrint('TransmitterProvider._loadHistoryCached error: $e');
     } finally {
       _historyCacheLoading = false;
+      historyLoadProgress.value = null; // hide the bar when done
     }
   }
 
@@ -222,16 +254,17 @@ class TransmitterProvider extends ChangeNotifier {
     // no getAtKeys regex scanning needed.
     _openTierCollections(atClient).ignore();
 
-    // After each sync, refresh history from Hive — sync may have pulled
-    // new keys (raw / 5m / 1h tier) that the live notification stream
-    // would otherwise miss until the next aggregate roll-up.
+    // After each sync, refresh tier collections from Hive — sync may have
+    // pulled new 5m/1h aggregate keys that the live notification stream
+    // would otherwise miss until the next roll-up.  The full Hive key scan
+    // (_loadHistoryCached) only runs once at startup; subsequent syncs are
+    // cheap because _refreshTierCollections only reads the two tier collections.
     _syncListener = _ProviderSyncListener((progress) {
       if (progress.syncStatus == SyncStatus.success ||
           progress.syncStatus == SyncStatus.failure) {
         debugPrint('TransmitterProvider: sync ${progress.syncStatus} → '
-            'refreshing history');
+            'refreshing tier collections');
         _refreshTierCollections().ignore();
-        _loadHistoryCached().ignore();
       }
     });
     atClient.syncService.addProgressListener(_syncListener!);
