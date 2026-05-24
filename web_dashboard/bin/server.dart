@@ -546,6 +546,18 @@ const _dashboardHtml = r'''
   .s-behind{color:#FF9800!important;opacity:1!important}
   .s-syncing{color:#2196F3!important;opacity:1!important}
   .s-error{color:#E53935!important;opacity:1!important}
+  /* Tab navigation */
+  .nav-tabs{display:flex;gap:4px}
+  .nav-tab{padding:5px 14px;border:1px solid #555;border-radius:4px;background:#222;color:#eee;cursor:pointer;font-size:.82rem}
+  .nav-tab.active{background:#2196F3;border-color:#2196F3;color:#fff}
+  .last-time{font-size:.78rem;color:#aaa}
+  /* Page sections */
+  .page{display:none}
+  .page.active{display:block}
+  /* SVG gauge cards */
+  .gauge-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+  .gauge-card{background:#1a1a1a;border-radius:8px;padding:10px 8px 4px;border:1.5px solid #333;text-align:center;transition:border-color .3s}
+  .gauge-card .gc-title{font-size:.72rem;font-weight:600;opacity:.65;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -660,13 +672,25 @@ for (const m of METRICS) {
     data: {datasets:[{
       label: m.label,
       data: [],
-      borderColor: m.color,
-      backgroundColor: m.color + '40',
+      borderColor: '#888',        // fallback; segment overrides per data point
+      backgroundColor: '#88888840', // fallback; segment overrides per data point
       borderWidth: 2,
       pointRadius: 0,
       tension: 0.2,
       fill: true,
       spanGaps: false,   // null points produce a visible gap in the line
+      // Colour each segment by the alert state of the starting data point so
+      // periods of warning/critical show orange/red in the historical fill.
+      segment: {
+        borderColor: ctx => {
+          const y = ctx.p0.parsed.y;
+          return y != null ? _alertChartColor(m, y) : undefined;
+        },
+        backgroundColor: ctx => {
+          const y = ctx.p0.parsed.y;
+          return y != null ? _alertChartColor(m, y) + '40' : undefined;
+        },
+      },
     }]},
     options: {
       animation: false,
@@ -871,11 +895,7 @@ function applyReadings(readings) {
     // Seed EMA from the last real history point so live appends start smooth.
     const lastReal = ds.data.findLast(p => p.y !== null);
     if (lastReal) _ema[m.key] = lastReal.y;
-    // Colour the chart to match the alert state of the latest value.
-    const latestValue = windowed[windowed.length - 1][m.key];
-    const color = _alertChartColor(m, latestValue);
-    ds.borderColor = color;
-    ds.backgroundColor = color + '40';
+    // Segment callbacks colour each segment automatically — no static update needed.
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
@@ -919,10 +939,7 @@ function appendReading(r) {
     ds.data.push({x: new Date(r.timestamp), y: _ema[m.key]});
     // Trim old points outside the current window
     while (ds.data.length && ds.data[0].x.getTime() < cutoff) ds.data.shift();
-    // Update chart colour to reflect current alert state.
-    const color = _alertChartColor(m, r[m.key]);
-    ds.borderColor = color;
-    ds.backgroundColor = color + '40';
+    // Segment callbacks colour each segment automatically — no static update needed.
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');

@@ -376,11 +376,10 @@ class _MetricCard extends StatefulWidget {
 }
 
 class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
-  // Mutable chart data — mutated in place for incremental appends so that
-  // Syncfusion can update only the changed points via [_ctrl.updateDataSource]
-  // without rebuilding the full series.
+  // Mutable chart data — updated incrementally on live reads; build() calls
+  // _buildSegmentedSeries() each time so both fill and line colour reflect
+  // the historical alert state for each section of the chart.
   late List<_DataPoint> _chartPoints;
-  ChartSeriesController? _ctrl;
   StreamSubscription<TransmitterStats>? _liveSub;
 
   // Axis bounds kept in state so they can be refreshed on each live point
@@ -468,13 +467,48 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
         .value;
   }
 
+  /// Builds exactly three [AreaSeries] — ok (green), warning (orange),
+  /// critical (red).  Each point appears with its real value in exactly one
+  /// series; the other two carry null so Syncfusion renders a gap there.
+  /// The fixed count (always 3) prevents Syncfusion from misidentifying a
+  /// structural series change and reverting to a single-colour render.
+  List<AreaSeries<_DataPoint, DateTime>> _buildSegmentedSeries(
+      List<_DataPoint> points, GaugeConfig cfg) {
+    AreaSeries<_DataPoint, DateTime> make(String name, Color c, Color match) =>
+        AreaSeries<_DataPoint, DateTime>(
+          name: name,
+          dataSource: points
+              .map((p) => _DataPoint(
+                  p.time,
+                  _alertColorFromConfig(p.value, cfg) == match
+                      ? p.value
+                      : null))
+              .toList(),
+          xValueMapper: (p, _) => p.time,
+          yValueMapper: (p, _) => p.value,
+          emptyPointSettings:
+              const EmptyPointSettings(mode: EmptyPointMode.gap),
+          color: c.withValues(alpha: 0.25),
+          borderColor: c,
+          borderWidth: 2,
+          animationDuration: 0,
+          markerSettings: const MarkerSettings(isVisible: false),
+        );
+
+    return [
+      make('ok', Colors.green, Colors.green),
+      make('warn', Colors.orange, Colors.orange),
+      make('crit', Colors.red, Colors.red),
+    ];
+  }
+
   /// Incremental live-append handler.  Called every ~2 seconds for each new
   /// raw reading.  Old data points are immutable so we only need to:
   ///   1. Trim the oldest points that have scrolled outside the window.
   ///   2. Possibly insert a gap sentinel if a break in the data is detected.
   ///   3. Append the new point.
-  /// Then tell Syncfusion exactly which indexes changed so it can update the
-  /// canvas without re-rendering the entire series.
+  /// setState triggers build() which calls _buildSegmentedSeries to recolour
+  /// each segment based on its historical alert state.
   void _onLivePoint(TransmitterStats stats) {
     final now = DateTime.now();
     final cutoff = now.subtract(widget.window.duration);
@@ -497,8 +531,6 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
         _chartPoints[trimCount].time.isBefore(cutoff)) {
       trimCount++;
     }
-    final removedIndexes =
-        trimCount > 0 ? List.generate(trimCount, (i) => i) : <int>[];
     if (trimCount > 0) _chartPoints.removeRange(0, trimCount);
 
     // ── Append new point (with gap sentinel if needed) ──────────────────────
@@ -519,22 +551,14 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
     _ema = _ema != null ? _kEmaAlpha * raw + (1 - _kEmaAlpha) * _ema! : raw;
     toAdd.add(_DataPoint(stats.timestamp, _ema));
 
-    final addedStartIdx = _chartPoints.length;
     _chartPoints.addAll(toAdd);
-    final addedIndexes = List.generate(toAdd.length, (i) => addedStartIdx + i);
-
     _latestValue = raw; // header shows the actual reading, not the EMA
 
-    // Update axis bounds and header value (setState); tell Syncfusion about
-    // the changed data indexes (updateDataSource — no full re-render).
+    // setState re-runs build() → _buildSegmentedSeries recolours each segment.
     setState(() {
       _windowStart = cutoff;
       _windowEnd = now;
     });
-    _ctrl?.updateDataSource(
-      addedDataIndexes: addedIndexes.isEmpty ? null : addedIndexes,
-      removedDataIndexes: removedIndexes.isEmpty ? null : removedIndexes,
-    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -588,25 +612,9 @@ class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
         ),
     ];
 
-    // Marker settings — always hidden; line charts look cleaner without dots
-    // and the tooltip shows exact values on tap.
-    const markerSettings = MarkerSettings(isVisible: false);
-
-    // All charts use AreaSeries.  The border and fill colour follow the
-    // alert state (green/orange/red) so the chart matches the gauge screen.
-    final series = <CartesianSeries<_DataPoint, DateTime>>[
-      AreaSeries<_DataPoint, DateTime>(
-        dataSource: _chartPoints,
-        xValueMapper: (p, _) => p.time,
-        yValueMapper: (p, _) => p.value,
-        emptyPointSettings: const EmptyPointSettings(mode: EmptyPointMode.gap),
-        color: alertColor.withValues(alpha: 0.25),
-        borderColor: alertColor,
-        borderWidth: 2,
-        markerSettings: markerSettings,
-        onRendererCreated: (ctrl) => _ctrl = ctrl,
-      ),
-    ];
+    // One AreaSeries per contiguous same-alert-colour segment — both the
+    // top-border line and the fill reflect each point's historical alert state.
+    final series = _buildSegmentedSeries(_chartPoints, cfg);
 
     return Card(
       shape: RoundedRectangleBorder(
