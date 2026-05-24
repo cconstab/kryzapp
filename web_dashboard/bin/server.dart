@@ -583,6 +583,16 @@ function _meterClass(m, v) {
   return 'm-ok';
 }
 
+// Returns the hex colour that matches the alert state for a metric value.
+// Used to colour both meter cards and chart lines consistently.
+function _alertChartColor(m, v) {
+  const cls = _meterClass(m, v);
+  if (cls === 'm-crit') return '#E53935';
+  if (cls === 'm-warn') return '#FF9800';
+  if (cls === 'm-ok')   return '#4CAF50';
+  return '#888';
+}
+
 function updateMeters(r) {
   _lastReading = r;
   for (const m of METRICS) {
@@ -610,11 +620,11 @@ for (const m of METRICS) {
       label: m.label,
       data: [],
       borderColor: m.color,
-      backgroundColor: m.color + '22',
+      backgroundColor: m.color + '40',
       borderWidth: 2,
       pointRadius: 0,
       tension: 0.2,
-      fill: m.key === 'heatTemp',
+      fill: true,
       spanGaps: false,   // null points produce a visible gap in the line
     }]},
     options: {
@@ -716,18 +726,33 @@ function _gapThresholdForWindow(windowSecs) {
 // draws a visible break over real outage periods.
 function injectGaps(readings, key, windowSecs) {
   const threshold = _gapThresholdForWindow(windowSecs ?? currentWindow);
+  // Readings < 30 s apart are raw 2 s tier — apply EMA.
+  // Readings ≥ 30 s apart are aggregated (5-min/1-hour) — use directly, re-seed.
+  const RAW_TIER_MAX_MS = 30000;
   if (readings.length < 2) {
     return readings.map(r => ({x: new Date(r.timestamp), y: r[key]}));
   }
   const result = [];
+  let ema;
   for (let i = 0; i < readings.length; i++) {
-    if (i > 0) {
+    const raw = readings[i][key];
+    if (i === 0) {
+      ema = raw;
+    } else {
       const ms = new Date(readings[i].timestamp) - new Date(readings[i - 1].timestamp);
       if (ms > threshold) {
+        // Real outage gap: insert null sentinel and re-seed EMA.
         result.push({x: new Date(new Date(readings[i - 1].timestamp).getTime() + 1000), y: null});
+        ema = raw;
+      } else if (ms < RAW_TIER_MAX_MS) {
+        // Dense raw tier: apply EMA smoothing.
+        ema = _EMA_ALPHA * raw + (1 - _EMA_ALPHA) * ema;
+      } else {
+        // Aggregated tier: keep averaged value, re-seed EMA.
+        ema = raw;
       }
     }
-    result.push({x: new Date(readings[i].timestamp), y: readings[i][key]});
+    result.push({x: new Date(readings[i].timestamp), y: ema});
   }
   return result;
 }
@@ -773,12 +798,12 @@ function setChartWindow(windowSecs) {
 }
 
 // ── EMA smoothing for live readings ───────────────────────────────────────────────
-// Alpha = 0.15 → ~12 s time constant at 2 s polling, matching the visual
+// Alpha = 0.05 → ~39 s time constant at 2 s polling, matching the visual
 // smoothness of 5-min tier data.  Seeded from the last history point so there
 // is no jump at the history→live transition.
 // The meter gauges always display the raw reading for accuracy.
 const _ema = {};
-const _EMA_ALPHA = 0.15;
+const _EMA_ALPHA = 0.05;
 
 function applyReadings(readings) {
   // Server may push up to 7 days; trim to the currently selected window
@@ -795,6 +820,11 @@ function applyReadings(readings) {
     // Seed EMA from the last real history point so live appends start smooth.
     const lastReal = ds.data.findLast(p => p.y !== null);
     if (lastReal) _ema[m.key] = lastReal.y;
+    // Colour the chart to match the alert state of the latest value.
+    const latestValue = windowed[windowed.length - 1][m.key];
+    const color = _alertChartColor(m, latestValue);
+    ds.borderColor = color;
+    ds.backgroundColor = color + '40';
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
@@ -838,6 +868,10 @@ function appendReading(r) {
     ds.data.push({x: new Date(r.timestamp), y: _ema[m.key]});
     // Trim old points outside the current window
     while (ds.data.length && ds.data[0].x.getTime() < cutoff) ds.data.shift();
+    // Update chart colour to reflect current alert state.
+    const color = _alertChartColor(m, r[m.key]);
+    ds.borderColor = color;
+    ds.backgroundColor = color + '40';
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');

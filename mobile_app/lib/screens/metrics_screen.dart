@@ -29,7 +29,6 @@ class _MetricSpec {
     required this.configKey,
     required this.color,
     required this.extract,
-    this.isAreaChart = false,
   });
 
   final String title;
@@ -37,13 +36,12 @@ class _MetricSpec {
       configKey; // key into DashboardConfig / GaugeConfig.getDefaults()
   final Color color;
   final double Function(TransmitterStats) extract;
-  final bool isAreaChart;
 }
 
-// EMA smoothing alpha for live raw readings.  Gives a ~12 s time constant at
+// EMA smoothing alpha for live raw readings.  Gives a ~39 s time constant at
 // a 2 s poll interval, matching the visual smoothness of the 5-min tier data.
 // The header value always shows the unsmoothed reading for accuracy.
-const _kEmaAlpha = 0.15;
+const _kEmaAlpha = 0.05;
 
 const _metrics = [
   _MetricSpec(
@@ -75,7 +73,6 @@ const _metrics = [
     configKey: 'heatTemp',
     color: Color(0xFFF44336),
     extract: _heatTemp,
-    isAreaChart: true,
   ),
   _MetricSpec(
     title: 'Fan Speed',
@@ -137,19 +134,35 @@ List<_DataPoint> _injectGaps(
     return data.map((s) => _DataPoint(s.timestamp, extract(s))).toList();
   }
   final threshold = _gapThresholdForWindow(window);
+  // Readings spaced < 30 s apart are raw 2 s tier — apply EMA to smooth them.
+  // Readings spaced ≥ 30 s apart are aggregated (5-min/1-hour) — use their
+  // value directly and re-seed the EMA so the smooth line continues cleanly
+  // into the next dense raw section.
+  const rawTierMaxInterval = Duration(seconds: 30);
   final result = <_DataPoint>[];
+  double? ema;
   for (var i = 0; i < data.length; i++) {
-    if (i > 0) {
-      final gap = data[i].timestamp.difference(data[i - 1].timestamp);
-      if (gap > threshold) {
-        // Null point one second after the last real point breaks the line.
+    final raw = extract(data[i]);
+    if (i == 0) {
+      ema = raw;
+    } else {
+      final interval = data[i].timestamp.difference(data[i - 1].timestamp);
+      if (interval > threshold) {
+        // Real outage: insert null sentinel and re-seed EMA from the new reading.
         result.add(_DataPoint(
           data[i - 1].timestamp.add(const Duration(seconds: 1)),
           null,
         ));
+        ema = raw;
+      } else if (interval < rawTierMaxInterval) {
+        // Dense raw tier: apply EMA smoothing.
+        ema = _kEmaAlpha * raw + (1 - _kEmaAlpha) * ema!;
+      } else {
+        // Aggregated tier: keep the averaged value, re-seed EMA.
+        ema = raw;
       }
     }
-    result.add(_DataPoint(data[i].timestamp, extract(data[i])));
+    result.add(_DataPoint(data[i].timestamp, ema));
   }
   return result;
 }
@@ -331,7 +344,7 @@ class _MetricCard extends StatefulWidget {
   State<_MetricCard> createState() => _MetricCardState();
 }
 
-class _MetricCardState extends State<_MetricCard> {
+class _MetricCardState extends State<_MetricCard> with WidgetsBindingObserver {
   // Mutable chart data — mutated in place for incremental appends so that
   // Syncfusion can update only the changed points via [_ctrl.updateDataSource]
   // without rebuilding the full series.
@@ -356,6 +369,7 @@ class _MetricCardState extends State<_MetricCard> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _rebuildFull(widget.data);
   }
 
@@ -383,8 +397,20 @@ class _MetricCardState extends State<_MetricCard> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _liveSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // When the app returns to the foreground, rebuild from the current data
+    // snapshot so the X-axis bounds are updated and any background-period gap
+    // is rendered correctly.  The next historyStream emission (triggered by
+    // the post-resume sync) will fill in any truly new tier data.
+    if (state == AppLifecycleState.resumed) {
+      setState(() => _rebuildFull(widget.data));
+    }
   }
 
   // ── Data helpers ───────────────────────────────────────────────────────────
@@ -403,8 +429,12 @@ class _MetricCardState extends State<_MetricCard> {
     _chartPoints = _injectGaps(windowed, widget.spec.extract, widget.window);
     _latestValue =
         windowed.isNotEmpty ? widget.spec.extract(windowed.last) : null;
-    // Seed EMA so live appends transition smoothly from the history line.
-    _ema = _latestValue;
+    // Seed live EMA from the last *smoothed* chart point so appendReading
+    // continues the line without a visible jump.
+    _ema = _chartPoints
+        .lastWhere((p) => p.value != null,
+            orElse: () => _DataPoint(_windowStart, null))
+        .value;
   }
 
   /// Incremental live-append handler.  Called every ~2 seconds for each new
@@ -531,37 +561,21 @@ class _MetricCardState extends State<_MetricCard> {
     // and the tooltip shows exact values on tap.
     const markerSettings = MarkerSettings(isVisible: false);
 
-    // _chartPoints is the mutable list maintained by _rebuildFull / _onLivePoint.
-    // Passing the same list reference on every build lets Syncfusion detect
-    // that no full re-render is needed when only updateDataSource was called.
-    final series = widget.spec.isAreaChart
-        ? <CartesianSeries<_DataPoint, DateTime>>[
-            AreaSeries<_DataPoint, DateTime>(
-              dataSource: _chartPoints,
-              xValueMapper: (p, _) => p.time,
-              yValueMapper: (p, _) => p.value,
-              emptyPointSettings:
-                  const EmptyPointSettings(mode: EmptyPointMode.gap),
-              color: widget.spec.color.withValues(alpha: 0.4),
-              borderColor: widget.spec.color,
-              borderWidth: 2,
-              markerSettings: markerSettings,
-              onRendererCreated: (ctrl) => _ctrl = ctrl,
-            ),
-          ]
-        : <CartesianSeries<_DataPoint, DateTime>>[
-            LineSeries<_DataPoint, DateTime>(
-              dataSource: _chartPoints,
-              xValueMapper: (p, _) => p.time,
-              yValueMapper: (p, _) => p.value,
-              emptyPointSettings:
-                  const EmptyPointSettings(mode: EmptyPointMode.gap),
-              color: widget.spec.color,
-              width: 2,
-              markerSettings: markerSettings,
-              onRendererCreated: (ctrl) => _ctrl = ctrl,
-            ),
-          ];
+    // All charts use AreaSeries.  The border and fill colour follow the
+    // alert state (green/orange/red) so the chart matches the gauge screen.
+    final series = <CartesianSeries<_DataPoint, DateTime>>[
+      AreaSeries<_DataPoint, DateTime>(
+        dataSource: _chartPoints,
+        xValueMapper: (p, _) => p.time,
+        yValueMapper: (p, _) => p.value,
+        emptyPointSettings: const EmptyPointSettings(mode: EmptyPointMode.gap),
+        color: alertColor.withValues(alpha: 0.25),
+        borderColor: alertColor,
+        borderWidth: 2,
+        markerSettings: markerSettings,
+        onRendererCreated: (ctrl) => _ctrl = ctrl,
+      ),
+    ];
 
     return Card(
       shape: RoundedRectangleBorder(
@@ -575,15 +589,6 @@ class _MetricCardState extends State<_MetricCard> {
           children: [
             Row(
               children: [
-                Container(
-                  width: 12,
-                  height: 12,
-                  decoration: BoxDecoration(
-                    color: widget.spec.color,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     widget.spec.title,
