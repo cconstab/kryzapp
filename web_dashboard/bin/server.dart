@@ -772,6 +772,14 @@ function setChartWindow(windowSecs) {
   }
 }
 
+// ── EMA smoothing for live readings ───────────────────────────────────────────────
+// Alpha = 0.15 → ~12 s time constant at 2 s polling, matching the visual
+// smoothness of 5-min tier data.  Seeded from the last history point so there
+// is no jump at the history→live transition.
+// The meter gauges always display the raw reading for accuracy.
+const _ema = {};
+const _EMA_ALPHA = 0.15;
+
 function applyReadings(readings) {
   // Server may push up to 7 days; trim to the currently selected window
   // so the chart doesn't show more data than the user requested.
@@ -784,6 +792,9 @@ function applyReadings(readings) {
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
     ds.data = injectGaps(windowed, m.key, currentWindow);
+    // Seed EMA from the last real history point so live appends start smooth.
+    const lastReal = ds.data.findLast(p => p.y !== null);
+    if (lastReal) _ema[m.key] = lastReal.y;
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
@@ -812,18 +823,26 @@ function appendReading(r) {
   const cutoff = now - currentWindow * 1000;
   for (const m of METRICS) {
     const ds = charts[m.key].data.datasets[0];
+    const raw = r[m.key];
+    // Apply EMA: smooth the live reading to match visual character of history.
+    // Reset EMA to the raw value after a gap so the line starts clean.
+    if (_ema[m.key] === undefined || insertGap) {
+      _ema[m.key] = raw;
+    } else {
+      _ema[m.key] = _EMA_ALPHA * raw + (1 - _EMA_ALPHA) * _ema[m.key];
+    }
     if (insertGap) {
       const lr = ds.data.findLast(p => p.y !== null);
       if (lr) ds.data.push({x: new Date(lr.x.getTime() + 1000), y: null});
     }
-    ds.data.push({x: new Date(r.timestamp), y: r[m.key]});
+    ds.data.push({x: new Date(r.timestamp), y: _ema[m.key]});
     // Trim old points outside the current window
     while (ds.data.length && ds.data[0].x.getTime() < cutoff) ds.data.shift();
     charts[m.key].options.scales.x.min = cutoff;
     charts[m.key].options.scales.x.max = now;
     charts[m.key].update('none');
   }
-  updateMeters(r);
+  updateMeters(r); // meters always show the raw reading
 }
 
 function connect() {

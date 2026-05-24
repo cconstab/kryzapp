@@ -40,6 +40,11 @@ class _MetricSpec {
   final bool isAreaChart;
 }
 
+// EMA smoothing alpha for live raw readings.  Gives a ~12 s time constant at
+// a 2 s poll interval, matching the visual smoothness of the 5-min tier data.
+// The header value always shows the unsmoothed reading for accuracy.
+const _kEmaAlpha = 0.15;
+
 const _metrics = [
   _MetricSpec(
     title: 'Modulation',
@@ -342,6 +347,10 @@ class _MetricCardState extends State<_MetricCard> {
   // Most-recent metric value — updated cheaply on each live reading.
   double? _latestValue;
 
+  // EMA state for live smoothing.  Seeded from the last history point in
+  // _rebuildFull so there is no visual jump when live data begins appending.
+  double? _ema;
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
@@ -394,6 +403,8 @@ class _MetricCardState extends State<_MetricCard> {
     _chartPoints = _injectGaps(windowed, widget.spec.extract, widget.window);
     _latestValue =
         windowed.isNotEmpty ? widget.spec.extract(windowed.last) : null;
+    // Seed EMA so live appends transition smoothly from the history line.
+    _ema = _latestValue;
   }
 
   /// Incremental live-append handler.  Called every ~2 seconds for each new
@@ -436,17 +447,22 @@ class _MetricCardState extends State<_MetricCard> {
     if (lastNonNull.value != null) {
       final gap = stats.timestamp.difference(lastNonNull.time);
       if (gap > _gapThresholdForWindow(widget.window)) {
+        // Gap sentinel also resets the EMA so the smoothed line starts fresh
+        // from the new reading rather than interpolating across the outage.
+        _ema = null;
         toAdd.add(
             _DataPoint(lastNonNull.time.add(const Duration(seconds: 1)), null));
       }
     }
-    toAdd.add(_DataPoint(stats.timestamp, widget.spec.extract(stats)));
+    final raw = widget.spec.extract(stats);
+    _ema = _ema != null ? _kEmaAlpha * raw + (1 - _kEmaAlpha) * _ema! : raw;
+    toAdd.add(_DataPoint(stats.timestamp, _ema));
 
     final addedStartIdx = _chartPoints.length;
     _chartPoints.addAll(toAdd);
     final addedIndexes = List.generate(toAdd.length, (i) => addedStartIdx + i);
 
-    _latestValue = widget.spec.extract(stats);
+    _latestValue = raw; // header shows the actual reading, not the EMA
 
     // Update axis bounds and header value (setState); tell Syncfusion about
     // the changed data indexes (updateDataSource — no full re-render).
@@ -613,12 +629,13 @@ class _MetricCardState extends State<_MetricCard> {
                 ),
                 crosshairBehavior: CrosshairBehavior(
                   enable: true,
-                  activationMode: ActivationMode.singleTap,
+                  activationMode: ActivationMode.longPress,
                   lineType: CrosshairLineType.vertical,
                   shouldAlwaysShow: false,
                 ),
                 tooltipBehavior: TooltipBehavior(
                   enable: true,
+                  activationMode: ActivationMode.longPress,
                   header: widget.spec.title,
                   format: 'point.x : point.y ${cfg.unit}',
                 ),
