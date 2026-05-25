@@ -1,0 +1,17 @@
+services:
+  kryz-dashboard:
+    build:
+      # Context is repo root so the ../shared path dep is available
+      context: ..
+      dockerfile: web_dashboard/Dockerfile
+    image: kryz-dashboard:latest
+    container_name: kryz-dashboard
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount your atSign keys read-only
+      - ${HOME}/.atsign/keys:/root/.atsign/keys:ro
+    command:
+      - "-a"
+      - "@visual61"          # ← change to your atSign
+    restart: unless-stopped

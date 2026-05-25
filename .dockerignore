@@ -1,0 +1,23 @@
+# Dart build artifacts
+**/.dart_tool/
+**/.pub-cache/
+**/build/
+
+# Mobile / Flutter (not needed for server build)
+mobile_app/
+
+# Local storage (atClient hive files)
+web_dashboard/storage/
+
+# macOS Xcode / Pods
+**/*.xcworkspace
+**/Pods/
+**/macos/
+
+# Gradle / Android
+**/android/
+**/.gradle/
+
+# Git
+.git/
+.gitignore

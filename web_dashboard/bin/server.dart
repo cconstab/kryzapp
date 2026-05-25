@@ -225,7 +225,11 @@ void main(List<String> arguments) async {
 
   final parser = ArgParser()
     ..addOption('atsign',
+<<<<<<< Updated upstream
         abbr: 'a', mandatory: true, help: 'atSign for reading the collection')
+=======
+        abbr: 'a', help: 'atSign for reading the collection (required)')
+>>>>>>> Stashed changes
     ..addOption('keys',
         abbr: 'k',
         help: 'Path to .atKeys file '
@@ -235,11 +239,28 @@ void main(List<String> arguments) async {
     ..addOption('port', abbr: 'p', defaultsTo: '8080', help: 'HTTP server port')
     ..addFlag('help', negatable: false, help: 'Show usage');
 
+<<<<<<< Updated upstream
   final args = parser.parse(arguments);
+=======
+  ArgResults args;
+  try {
+    args = parser.parse(arguments);
+  } on ArgParserException catch (e) {
+    print('Error: ${e.message}\n\nUsage:\n${parser.usage}');
+    exit(1);
+  }
+>>>>>>> Stashed changes
   if (args['help'] as bool) {
     print('KRYZ Web Dashboard Server\n\nUsage:\n${parser.usage}');
     exit(0);
   }
+<<<<<<< Updated upstream
+=======
+  if (!args.wasParsed('atsign')) {
+    print('Error: --atsign (-a) is required.\n\nUsage:\n${parser.usage}');
+    exit(1);
+  }
+>>>>>>> Stashed changes
 
   final atSign = args['atsign'] as String;
   final keysPath = args['keys'] as String? ??
