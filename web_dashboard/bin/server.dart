@@ -522,10 +522,12 @@ const _dashboardHtml = r'''
   }
   .toolbar button.active{background:#2196F3;border-color:#2196F3}
   #status{margin-left:auto;font-size:.8rem;opacity:.6}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:640px){.grid{grid-template-columns:repeat(1,1fr)}}
   .card{background:#1a1a1a;border-radius:8px;padding:12px}
   .card h2{font-size:.85rem;margin-bottom:8px;opacity:.7}
-  canvas{width:100%!important;height:160px!important}
+  canvas{width:100%!important;height:100%!important}
+  .chart-wrap{width:100%;aspect-ratio:200/120}
   .meters{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:14px}
   .meter{
     background:#1a1a1a;border-radius:8px;padding:10px 14px;
@@ -555,18 +557,23 @@ const _dashboardHtml = r'''
   .page{display:none}
   .page.active{display:block}
   /* SVG gauge cards */
-  .gauge-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+  .gauge-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+  @media(max-width:640px){.gauge-grid{grid-template-columns:repeat(2,1fr)}}
   .gauge-card{background:#1a1a1a;border-radius:8px;padding:10px 8px 4px;border:1.5px solid #333;text-align:center;transition:border-color .3s}
   .gauge-card .gc-title{font-size:.72rem;font-weight:600;opacity:.65;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+  .gc-readout{margin-top:-4px;text-align:center;line-height:1}
+  .gc-value{font-size:1.8rem;font-weight:700}
+  .gc-unit{font-size:.72rem;opacity:.5;margin-left:2px}
 </style>
 </head>
 <body>
-<h1>⚡ KRYZ Transmitter — Live Metrics</h1>
-<div class="toolbar">
-  <button data-w="3600"  class="active">1 h</button>
-  <button data-w="21600"         >6 h</button>
-  <button data-w="86400"         >24 h</button>
-  <button data-w="604800"        >7 d</button>
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+  <h1 style="margin:0;font-size:1.1rem;opacity:.8">&#x1F4FB; KRYZ Transmitter</h1>
+  <div class="nav-tabs">
+    <button class="nav-tab active" data-tab="gauges">Gauges</button>
+    <button class="nav-tab" data-tab="charts">Charts</button>
+  </div>
+  <span id="lastTime" class="last-time"></span>
   <span id="status">Connecting…</span>
 </div>
 <div class="sync-bar" id="syncBar">
@@ -577,8 +584,18 @@ const _dashboardHtml = r'''
   <span id="syncDiff"></span>
   <span id="syncPending"></span>
 </div>
-<div class="meters" id="meters"></div>
-<div class="grid" id="grid"></div>
+<div id="page-gauges" class="page active">
+  <div class="gauge-grid" id="gaugeGrid"></div>
+</div>
+<div id="page-charts" class="page">
+  <div class="toolbar">
+    <button data-w="3600" class="active">1 h</button>
+    <button data-w="21600">6 h</button>
+    <button data-w="86400">24 h</button>
+    <button data-w="604800">7 d</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
 
 <script>
 const METRICS = [
@@ -594,14 +611,152 @@ const charts = {};
 let ws;
 let currentWindow = 3600;
 
-// ── Build meter cards (live readout) ─────────────────────────────────────
-const metersEl = document.getElementById('meters');
+// ── Pointer gauge system ──────────────────────────────────────────────────────
+// Classic analog pointer (needle) gauges with spring-physics hysteresis.
+// Each gauge has a semicircle arc with coloured zone bands and a thin needle
+// that glides smoothly toward each new value with natural overshoot.
+
+const _GCX = 100, _GCY = 103, _GR = 80, _GNL = 72;
+
+// Map 0-1 fraction → needle rotation degrees (−90=left/min, +90=right/max).
+function _pctToRot(pct) {
+  return -90 + Math.max(0, Math.min(1, pct)) * 180;
+}
+
+// SVG arc-path string for a value sub-range [v1,v2] on metric m.
+function _arcSegPath(v1, v2, m) {
+  const p1 = Math.max(0, Math.min(1, (v1 - m.minVal) / (m.maxVal - m.minVal)));
+  const p2 = Math.max(0, Math.min(1, (v2 - m.minVal) / (m.maxVal - m.minVal)));
+  if (p2 <= p1 + 0.001) return '';
+  const th1 = Math.PI * (1 - p1), th2 = Math.PI * (1 - p2);
+  const x1 = (_GCX + _GR * Math.cos(th1)).toFixed(2);
+  const y1 = (_GCY - _GR * Math.sin(th1)).toFixed(2);
+  const x2 = (_GCX + _GR * Math.cos(th2)).toFixed(2);
+  const y2 = (_GCY - _GR * Math.sin(th2)).toFixed(2);
+  // The gauge is always a semicircle (180°), so no segment ever spans > 180°
+  // of the full circle.  large-arc-flag must always be 0.
+  return `M ${x1} ${y1} A ${_GR} ${_GR} 0 0 1 ${x2} ${y2}`;
+}
+
+// Build coloured zone-arc HTML for a metric (ok / warn / crit bands).
+// Returns empty string when the metric has no thresholds.
+function _buildZoneArcs(m) {
+  const lo = m.minVal, hi = m.maxVal;
+  const cL = m.critLow  !== undefined ? Math.max(lo, m.critLow)  : null;
+  const wL = m.warnLow  !== undefined ? Math.max(lo, m.warnLow)  : null;
+  const wH = m.warnHigh !== undefined ? Math.min(hi, m.warnHigh) : null;
+  const cH = m.critHigh !== undefined ? Math.min(hi, m.critHigh) : null;
+  if (cL === null && wL === null && wH === null && cH === null) return '';
+  const sw = 'stroke-width="14" stroke-linecap="butt"';
+  let s = '';
+  if (cL !== null && cL > lo)
+    s += `<path d="${_arcSegPath(lo, cL, m)}" fill="none" stroke="#E5393550" ${sw}/>`;
+  if (wL !== null)
+    s += `<path d="${_arcSegPath(cL ?? lo, wL, m)}" fill="none" stroke="#FF980050" ${sw}/>`;
+  const okFrom = wL ?? cL ?? lo, okTo = wH ?? cH ?? hi;
+  if (okTo > okFrom)
+    s += `<path d="${_arcSegPath(okFrom, okTo, m)}" fill="none" stroke="#4CAF5050" ${sw}/>`;
+  if (wH !== null)
+    s += `<path d="${_arcSegPath(wH, cH ?? hi, m)}" fill="none" stroke="#FF980050" ${sw}/>`;
+  if (cH !== null && cH < hi)
+    s += `<path d="${_arcSegPath(cH, hi, m)}" fill="none" stroke="#E5393550" ${sw}/>`;
+  return s;
+}
+
+// Rebuild zone arcs in-place after a config threshold change.
+function _rebuildZoneArcs(m) {
+  const g = document.getElementById('gz_' + m.key);
+  if (g) g.innerHTML = _buildZoneArcs(m);
+}
+
+// Spring-physics animation loop.
+// Low stiffness (k=0.04) + high damping (d=0.88) = slow, graceful glide
+// with a gentle overshoot, like a heavy analog needle with mechanical inertia.
+const _GAnim = {};
+let _gAnimRaf = null;
+function _runGaugeAnimation() {
+  let anyMoving = false;
+  for (const key in _GAnim) {
+    const a = _GAnim[key];
+    a.vel += (a.target - a.rot) * 0.028;
+    a.vel *= 0.90;
+    a.rot += a.vel;
+    const needle = document.getElementById('gn_' + key);
+    if (needle) needle.setAttribute('transform', `rotate(${a.rot.toFixed(2)}, ${_GCX}, ${_GCY})`);
+    if (Math.abs(a.vel) > 0.02 || Math.abs(a.target - a.rot) > 0.05) anyMoving = true;
+  }
+  _gAnimRaf = anyMoving ? requestAnimationFrame(_runGaugeAnimation) : null;
+}
+
+function updateGauge(m, rawV) {
+  if (rawV === null || rawV === undefined) return;
+  const v = +rawV;
+  const rot   = _pctToRot((v - m.minVal) / (m.maxVal - m.minVal));
+  const color = _alertChartColor(m, v);
+  if (!_GAnim[m.key]) {
+    _GAnim[m.key] = {rot, vel: 0, target: rot};
+    const n = document.getElementById('gn_' + m.key);
+    if (n) n.setAttribute('transform', `rotate(${rot.toFixed(2)}, ${_GCX}, ${_GCY})`);
+  } else {
+    _GAnim[m.key].target = rot;
+  }
+  if (_gAnimRaf === null) _gAnimRaf = requestAnimationFrame(_runGaugeAnimation);
+  const valEl = document.getElementById('gv_' + m.key);
+  if (valEl) { valEl.textContent = v.toFixed(1); valEl.style.color = color; }
+  const needle = document.getElementById('gn_' + m.key);
+  if (needle) needle.setAttribute('stroke', color);
+  document.getElementById('gc_' + m.key).style.borderColor = color + '99';
+}
+
+function _fmtGaugeTick(v) {
+  if (Math.abs(v) >= 10000) return (v/1000).toFixed(0)+'k';
+  if (Math.abs(v) >=  1000) return parseFloat((v/1000).toFixed(1))+'k';
+  return parseFloat(v.toFixed(1)).toString();
+}
+function _updateGaugeTicks(m) {
+  for (let i = 0; i <= 4; i++) {
+    const el = document.getElementById('gt_'+m.key+'_'+i);
+    if (el) el.textContent = _fmtGaugeTick(m.minVal + (m.maxVal - m.minVal) * i / 4);
+  }
+}
+const gaugeGridEl = document.getElementById('gaugeGrid');
+const _trackFull = `M ${_GCX-_GR} ${_GCY} A ${_GR} ${_GR} 0 0 1 ${_GCX+_GR} ${_GCY}`;
 for (const m of METRICS) {
-  const el = document.createElement('div');
-  el.className = 'meter m-idle';
-  el.id = 'm_' + m.key;
-  el.innerHTML = `<div class="m-label">${m.label}</div><div class="m-value" id="mv_${m.key}">—</div><div class="m-unit">${m.unit}</div>`;
-  metersEl.appendChild(el);
+  const card = document.createElement('div');
+  card.className = 'gauge-card';
+  card.id = 'gc_' + m.key;
+  // Radial tick marks at 0 %, 25 %, 50 %, 75 %, 100 % with value labels.
+  let ticks = '';
+  for (let i = 0; i <= 4; i++) {
+    const th = Math.PI * (1 - i / 4);
+    const ix = (_GCX + (_GR - 20) * Math.cos(th)).toFixed(1);
+    const iy = (_GCY - (_GR - 20) * Math.sin(th)).toFixed(1);
+    const ox = (_GCX + (_GR - 7)  * Math.cos(th)).toFixed(1);
+    const oy = (_GCY - (_GR - 7)  * Math.sin(th)).toFixed(1);
+    const lx = (_GCX + (_GR + 12) * Math.cos(th)).toFixed(1);
+    const ly = (_GCY - (_GR + 12) * Math.sin(th)).toFixed(1);
+    const anch = i === 0 ? 'start' : i === 4 ? 'end' : 'middle';
+    const tv = _fmtGaugeTick(m.minVal + (m.maxVal - m.minVal) * i / 4);
+    ticks += `<line x1="${ix}" y1="${iy}" x2="${ox}" y2="${oy}" stroke="#555" stroke-width="1.5"/>`;
+    ticks += `<text id="gt_${m.key}_${i}" x="${lx}" y="${ly}" text-anchor="${anch}" dominant-baseline="middle" font-size="8" fill="#555">${tv}</text>`;
+  }
+  card.innerHTML = `
+    <div class="gc-title">${m.label}</div>
+    <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg">
+      <path d="${_trackFull}" fill="none" stroke="#252525" stroke-width="14" stroke-linecap="butt"/>
+      <g id="gz_${m.key}">${_buildZoneArcs(m)}</g>
+      ${ticks}
+      <line id="gn_${m.key}" x1="${_GCX}" y1="${_GCY}" x2="${_GCX}" y2="${_GCY-_GNL}"
+            stroke="#777" stroke-width="2.5" stroke-linecap="round"
+            transform="rotate(-90, ${_GCX}, ${_GCY})"/>
+      <circle cx="${_GCX}" cy="${_GCY}" r="6" fill="#2a2a2a"/>
+      <circle cx="${_GCX}" cy="${_GCY}" r="3.5" fill="#bbb"/>
+
+    </svg>
+    <div class="gc-readout">
+      <span id="gv_${m.key}" class="gc-value">—</span><span class="gc-unit">${m.unit}</span>
+    </div>`;
+  gaugeGridEl.appendChild(card);
 }
 
 function _meterClass(m, v) {
@@ -649,12 +804,14 @@ function _alertChartColor(m, v) {
 function updateMeters(r) {
   _lastReading = r;
   for (const m of METRICS) {
-    const v = r[m.key];
-    const el = document.getElementById('m_' + m.key);
-    const cls = _meterClass(m, v);
-    el.className = 'meter ' + cls;
-    document.getElementById('mv_' + m.key).textContent =
-      (v !== null && v !== undefined) ? (+v).toFixed(1) : '—';
+    updateGauge(m, r[m.key]);
+  }
+  if (r.timestamp) {
+    const ts = new Date(r.timestamp);
+    const fmt = new Intl.DateTimeFormat(undefined, {
+      month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'
+    });
+    document.getElementById('lastTime').textContent = 'Last: ' + fmt.format(ts);
   }
 }
 
@@ -663,7 +820,7 @@ const grid = document.getElementById('grid');
 for (const m of METRICS) {
   const card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = `<h2>${m.label} (${m.unit})</h2><canvas id="c_${m.key}"></canvas>`;
+  card.innerHTML = `<h2>${m.label} (${m.unit})</h2><div class="chart-wrap"><canvas id="c_${m.key}"></canvas></div>`;
   grid.appendChild(card);
 
   const ctx = document.getElementById(`c_${m.key}`).getContext('2d');
@@ -697,6 +854,7 @@ for (const m of METRICS) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: {mode: 'index', intersect: false},
+      layout: {padding: {top: 12}},
       scales: {
         x: {
           type: 'time',
@@ -719,7 +877,7 @@ for (const m of METRICS) {
           min: m.minVal,
           max: m.maxVal,
           grid: {color:'#333'},
-          ticks: {color:'#aaa'},
+          ticks: {color:'#aaa', maxTicksLimit: 6},
         },
       },
       plugins: {
@@ -750,14 +908,23 @@ function applyConfig(d) {
     const t = d.thresholds[m.key];
     if (!t) continue;
     if (t.unit     !== undefined) m.unit     = t.unit;
-    if (t.minVal  !== undefined) { m.minVal  = t.minVal;  charts[m.key].options.scales.y.min = t.minVal; }
-    if (t.maxVal  !== undefined) { m.maxVal  = t.maxVal;  charts[m.key].options.scales.y.max = t.maxVal; }
+    if (t.minVal !== undefined) {
+      m.minVal = t.minVal;
+      charts[m.key].options.scales.y.min = t.minVal;
+      _updateGaugeTicks(m);
+    }
+    if (t.maxVal !== undefined) {
+      m.maxVal = t.maxVal;
+      charts[m.key].options.scales.y.max = t.maxVal;
+      _updateGaugeTicks(m);
+    }
     if (t.warnHigh !== undefined) m.warnHigh = t.warnHigh;
     if (t.critHigh !== undefined) m.critHigh = t.critHigh;
     if (t.warnLow  !== undefined) m.warnLow  = t.warnLow;
     if (t.critLow  !== undefined) m.critLow  = t.critLow;
-    // Rebuild threshold annotations from updated values.
+    // Rebuild threshold annotations and gauge zone arcs from updated values.
     charts[m.key].options.plugins.annotation.annotations = _buildThresholdAnnotations(m);
+    _rebuildZoneArcs(m);
     charts[m.key].update('none');
   }
   // Refresh meter colours with current data if we already have a reading.
@@ -988,6 +1155,20 @@ document.querySelectorAll('.toolbar button').forEach(btn => {
     setChartWindow(currentWindow);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({action:'history', window: currentWindow}));
+    }
+  });
+});
+
+// ── Tab navigation ────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + btn.dataset.tab).classList.add('active');
+    // Trigger chart resize when switching to charts tab so canvases fill correctly.
+    if (btn.dataset.tab === 'charts') {
+      for (const m of METRICS) charts[m.key].resize();
     }
   });
 });
