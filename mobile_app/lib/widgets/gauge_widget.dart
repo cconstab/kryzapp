@@ -47,7 +47,8 @@ class _GaugeWidgetState extends State<GaugeWidget>
     );
     _animation =
         Tween<double>(begin: _currentValue, end: _currentValue).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
+      CurvedAnimation(
+          parent: _animationController, curve: Curves.easeInOutCubic),
     );
     // Start with the animation controller at 1.0 (completed)
     _animationController.value = 1.0;
@@ -63,7 +64,8 @@ class _GaugeWidgetState extends State<GaugeWidget>
         begin: currentAnimatedValue,
         end: widget.value,
       ).animate(
-        CurvedAnimation(parent: _animationController, curve: Curves.easeInOutCubic),
+        CurvedAnimation(
+            parent: _animationController, curve: Curves.easeInOutCubic),
       );
       _animationController.forward(from: 0.0).then((_) {
         _currentValue = widget.value;
@@ -102,23 +104,36 @@ class _GaugeWidgetState extends State<GaugeWidget>
   }
 
   double? _calculateInterval() {
-    // Calculate appropriate interval to prevent label overlap
     final range = widget.max - widget.min;
+    if (range <= 0) return null;
 
-    // For large ranges (like Fan Speed 0-8000), use larger intervals
-    if (range > 5000) {
-      return 2000; // Show labels at 0, 2000, 4000, 6000, 8000
-    } else if (range > 1000) {
-      return 500; // Show labels at reasonable intervals
-    } else if (range > 100) {
-      return 50;
-    } else if (range > 50) {
-      return 25;
-    } else if (range > 10) {
-      return 10;
-    }
-    // Let the gauge auto-calculate for small ranges
-    return null;
+    // Target at most 5 label steps.  Find the smallest "nice" number
+    // (1, 2, 5 × 10^n) that keeps the step count ≤ 5.
+    const maxSteps = 5;
+    final raw = range / maxSteps;
+    final mag = _floorPow10(raw); // largest power of 10 ≤ raw
+    final norm = raw / mag; // 1.0 – 9.9…
+
+    double nice;
+    if (norm <= 1)
+      nice = 1;
+    else if (norm <= 2)
+      nice = 2;
+    else if (norm <= 5)
+      nice = 5;
+    else
+      nice = 10;
+
+    return nice * mag;
+  }
+
+  /// Largest power of 10 that is ≤ [value].
+  double _floorPow10(double value) {
+    if (value <= 0) return 1;
+    double p = 1;
+    while (p * 10 <= value) p *= 10;
+    while (p > value) p /= 10;
+    return p;
   }
 
   @override

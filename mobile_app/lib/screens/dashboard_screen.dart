@@ -8,6 +8,7 @@ import '../providers/transmitter_provider.dart';
 import '../widgets/gauge_widget.dart';
 import '../widgets/status_card.dart';
 import 'settings_screen.dart';
+import 'metrics_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({Key? key}) : super(key: key);
@@ -53,16 +54,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       transmitterProvider.updateStats(stats);
     };
 
+    // Wire up the collection so TransmitterProvider can answer historical queries
+    atService.onCollectionReady = (collection) {
+      if (atService.atClient != null) {
+        transmitterProvider.setCollection(collection, atService.atClient!);
+      }
+    };
+    // Collection may already be ready if auth happened before the screen mounted
+    if (atService.statsCollection != null && atService.atClient != null) {
+      transmitterProvider.setCollection(
+          atService.statsCollection!, atService.atClient!);
+    }
+
     atService.onAlertReceived = (alert) {
       transmitterProvider.updateAlert(alert);
-      
+
       // Only show dialog if alert just became active AND user hasn't acknowledged it yet
       // Once acknowledged, don't show it again until alert clears and comes back
       if (!_alertActive) {
         _alertActive = true;
-        _alertAcknowledged = false; // Reset acknowledgment for new alert condition
+        _alertAcknowledged =
+            false; // Reset acknowledgment for new alert condition
       }
-      
+
       if (!_alertAcknowledged) {
         _alertAcknowledged = true;
         _showAlertDialog(alert);
@@ -152,13 +166,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final configService = Provider.of<ConfigService>(context);
     final config = configService.config;
     final transmitterProvider = Provider.of<TransmitterProvider>(context);
-    
+
     // Check if alert has been cleared - if so, reset the alert flags
     if (transmitterProvider.latestAlert == null && _alertActive) {
       _alertActive = false;
-      _alertAcknowledged = false; // Ready to show modal again when alert returns
+      _alertAcknowledged =
+          false; // Ready to show modal again when alert returns
     }
-    
+
     final now = DateTime.now();
     final timeFormat = DateFormat('HH:mm:ss');
     final dateFormat = DateFormat('MMM dd, yyyy');
@@ -181,6 +196,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Metrics History',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MetricsScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Settings',

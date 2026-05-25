@@ -1,0 +1,34 @@
+name: web_dashboard
+description: >
+  Server-side atPlatform collection reader for KRYZ.
+  Authenticates with at_client, watches the AtCollection<TransmitterStats>,
+  and serves a live Chart.js dashboard via HTTP + WebSocket (shelf).
+
+  NOTE: Flutter web is not supported by at_client (platform keychain plugins
+  have no web implementation). This package solves that by running the
+  at_client side on the server and pushing data to any web browser via
+  WebSocket — no atSign credentials ever touch the browser.
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  at_client: 3.12.0-rc.1
+  at_onboarding_cli: ^1.15.0
+  at_utils: ^3.0.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+  shelf_web_socket: ^2.0.0
+  web_socket_channel: ^2.4.0
+  logging: ^1.2.0
+  args: ^2.4.2
+  kryz_shared:
+    path: ../shared
+
+dependency_overrides:
+  at_client: 3.12.0-rc.1
+
+dev_dependencies:
+  lints: ^3.0.0
