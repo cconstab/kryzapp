@@ -231,7 +231,7 @@ void main(List<String> arguments) async {
         help: 'Path to .atKeys file '
             '(default: ~/.atsign/keys/<atsign>_key.atKeys)')
     ..addOption('host',
-        abbr: 'H', defaultsTo: '0.0.0.0', help: 'HTTP server bind address')
+        abbr: 'H', defaultsTo: 'localhost', help: 'HTTP server bind address')
     ..addOption('port', abbr: 'p', defaultsTo: '8080', help: 'HTTP server port')
     ..addFlag('help', negatable: false, help: 'Show usage');
 
