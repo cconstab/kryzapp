@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 
 class GaugeWidget extends StatefulWidget {
@@ -33,49 +34,43 @@ class GaugeWidget extends StatefulWidget {
 
 class _GaugeWidgetState extends State<GaugeWidget>
     with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _animation;
-  double _currentValue = 0.0;
+  // Spring parameters matching the web dashboard's analog-needle feel.
+  // The controller runs in normalised [0,1] space so the spring is
+  // independent of each metric's physical range (e.g. 0–120 % vs 1–3.5 SWR).
+  // ω₀ = √180 ≈ 13.4 rad/s → half-period ≈ 0.47 s; ζ = 20/(2·13.4) ≈ 0.75
+  // → slightly underdamped: settles in ~0.4 s with a tiny graceful overshoot.
+  static const _spring =
+      SpringDescription(mass: 1.0, stiffness: 180, damping: 20);
+
+  // Controller drives a normalised [0,1] needle position; we map back to
+  // physical units in build().  Unbounded so overshoot past [0,1] is allowed.
+  late AnimationController _controller;
+
+  double _normalize(double v) {
+    final range = widget.max - widget.min;
+    return range != 0 ? (v - widget.min) / range : 0;
+  }
 
   @override
   void initState() {
     super.initState();
-    _currentValue = widget.value;
-    _animationController = AnimationController(
-      duration: const Duration(milliseconds: 1200),
-      vsync: this,
-    );
-    _animation =
-        Tween<double>(begin: _currentValue, end: _currentValue).animate(
-      CurvedAnimation(
-          parent: _animationController, curve: Curves.easeInOutCubic),
-    );
-    // Start with the animation controller at 1.0 (completed)
-    _animationController.value = 1.0;
+    _controller = AnimationController.unbounded(vsync: this)
+      ..value = _normalize(widget.value);
   }
 
   @override
   void didUpdateWidget(GaugeWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.value != widget.value) {
-      // Use the current animated value as the starting point for smoother transitions
-      final currentAnimatedValue = _animation.value;
-      _animation = Tween<double>(
-        begin: currentAnimatedValue,
-        end: widget.value,
-      ).animate(
-        CurvedAnimation(
-            parent: _animationController, curve: Curves.easeInOutCubic),
+      _controller.animateWith(
+        SpringSimulation(_spring, _controller.value, _normalize(widget.value), 0),
       );
-      _animationController.forward(from: 0.0).then((_) {
-        _currentValue = widget.value;
-      });
     }
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
@@ -146,9 +141,11 @@ class _GaugeWidgetState extends State<GaugeWidget>
     final padding = isSmallScreen ? 8.0 : 16.0;
 
     return AnimatedBuilder(
-      animation: _animation,
+      animation: _controller,
       builder: (context, child) {
-        final animatedValue = _animation.value;
+        // Map normalised position back to physical gauge units.
+        final animatedValue =
+            widget.min + _controller.value * (widget.max - widget.min);
         return Card(
           elevation: 4,
           child: Padding(

@@ -59,6 +59,73 @@ List<Map<String, dynamic>> _cacheSnapshot(DateTime cutoff) => _historyCache
     .map((s) => s.toJson())
     .toList();
 
+/// Compact wire format (~65 bytes vs ~200 bytes full JSON — 3× smaller).
+/// Field order in [v] matches the METRICS array order in the browser JS:
+/// [modulation, swr, powerOut, powerRef, heatTemp, fanSpeed].
+Map<String, dynamic> _compact(TransmitterStats s) => {
+  't': s.timestamp.millisecondsSinceEpoch,
+  'i': s.transmitterId,
+  'v': [s.modulation, s.swr, s.powerOut, s.powerRef, s.heatTemp, s.fanSpeed],
+  's': s.status,
+  if (s.alertLevel != null) 'a': s.alertLevel,
+};
+
+List<Map<String, dynamic>> _compactSnapshot(DateTime cutoff) => _historyCache
+    .where((s) => s.timestamp.isAfter(cutoff))
+    .map(_compact)
+    .toList();
+
+/// Send [compact] readings to a single [client] in 100-item chunks, yielding
+/// to the Dart event loop between chunks so live 'r' messages can interleave
+/// in the TCP stream and the browser sees updates on slow links.
+Future<void> _sendHistoryChunked(
+    WebSocketChannel client, List<Map<String, dynamic>> compact) async {
+  const chunkSize = 100;
+  if (compact.isEmpty) {
+    try {
+      client.sink.add(
+          jsonEncode({'type': 'history', 'data': <dynamic>[], 'final': true}));
+    } catch (_) {
+      _clients.remove(client);
+    }
+    return;
+  }
+  for (var i = 0; i < compact.length; i += chunkSize) {
+    final end = i + chunkSize;
+    final chunk =
+        compact.sublist(i, end < compact.length ? end : compact.length);
+    final isFinal = end >= compact.length;
+    try {
+      client.sink.add(
+          jsonEncode({'type': 'history', 'data': chunk, 'final': isFinal}));
+    } catch (_) {
+      _clients.remove(client);
+      return;
+    }
+    if (!isFinal) await Future.delayed(Duration.zero);
+  }
+}
+
+/// Broadcast [compact] readings to all connected clients in 100-item chunks,
+/// yielding between chunks so live 'r' messages can interleave in the stream.
+Future<void> _broadcastHistoryChunked(
+    List<Map<String, dynamic>> compact) async {
+  if (_clients.isEmpty) return;
+  const chunkSize = 100;
+  if (compact.isEmpty) {
+    _broadcast({'type': 'history', 'data': <dynamic>[], 'final': true});
+    return;
+  }
+  for (var i = 0; i < compact.length; i += chunkSize) {
+    final end = i + chunkSize;
+    final chunk =
+        compact.sublist(i, end < compact.length ? end : compact.length);
+    final isFinal = end >= compact.length;
+    _broadcast({'type': 'history', 'data': chunk, 'final': isFinal});
+    if (!isFinal) await Future.delayed(Duration.zero);
+  }
+}
+
 /// Load all historical stats from the local Hive store into [_historyCache].
 ///
 /// Collects all items into a local list first (no per-item cache mutations
@@ -119,9 +186,10 @@ Future<void> _loadHistoryCached() async {
     sw.stop();
     _log.info(
         'History scan complete: ${_historyCache.length} readings in ${sw.elapsedMilliseconds}ms');
-    // Single final broadcast with the complete, sorted dataset.
+    // Broadcast the complete sorted dataset in chunks so live 'r' messages
+    // can interleave between chunks on slow links.
     if (_clients.isNotEmpty) {
-      _broadcast({'type': 'history', 'data': _cacheSnapshot(cutoff7d)});
+      await _broadcastHistoryChunked(_compactSnapshot(cutoff7d));
     }
   } catch (e) {
     _log.warning('_loadHistoryCached error: $e');
@@ -176,7 +244,7 @@ Future<void> _pollNewKeys() async {
         if (_cacheAdd(stats) && _clients.isNotEmpty) {
           _log.fine(
               'Poll new key: ${stats.transmitterId} @ ${stats.timestamp}');
-          _broadcast({'type': 'reading', 'data': stats.toJson()});
+          _broadcast({'type': 'r', 'data': _compact(stats)});
         }
       } catch (_) {}
     }
@@ -194,11 +262,11 @@ DateTime? _latestBroadcastTime;
 Future<void> _pushHistoryAll(int secs) async {
   if (_clients.isEmpty) return;
   final cutoff = DateTime.now().subtract(Duration(seconds: secs));
-  final readings = _cacheSnapshot(cutoff);
-  if (readings.isNotEmpty) {
-    _broadcast({'type': 'history', 'data': readings});
-    _log.info('History push: ${readings.length} readings (${secs}s window) '
+  final compact = _compactSnapshot(cutoff);
+  if (compact.isNotEmpty) {
+    _log.info('History push: ${compact.length} readings (${secs}s window) '
         'to ${_clients.length} client(s)');
+    await _broadcastHistoryChunked(compact);
   }
   // Trigger the initial load if it hasn't run yet (e.g. client connected
   // before auth completed) — but never re-run once _cacheLoaded is set.
@@ -287,13 +355,14 @@ void main(List<String> arguments) async {
         if (_lastConfigPayload != null) {
           ws.sink.add(jsonEncode(_lastConfigPayload));
         }
-        // Send whatever is already in the cache immediately (fast).
-        // The background _loadHistoryCached() will broadcast more as it runs.
-        final cached =
-            _cacheSnapshot(DateTime.now().subtract(const Duration(days: 7)));
-        if (cached.isNotEmpty) {
-          ws.sink.add(jsonEncode({'type': 'history', 'data': cached}));
-          _log.info('Sent ${cached.length} cached history items to new client');
+        // Send whatever is already in the cache immediately (chunked so live
+        // 'r' messages can interleave between chunks on slow links).
+        final compact =
+            _compactSnapshot(DateTime.now().subtract(const Duration(days: 7)));
+        if (compact.isNotEmpty) {
+          unawaited(_sendHistoryChunked(ws, compact));
+          _log.info(
+              'Sending ${compact.length} cached history items to new client (chunked)');
         }
 
         // When client requests historical data it sends:
@@ -305,10 +374,7 @@ void main(List<String> arguments) async {
               if (cmd['action'] == 'history') {
                 final secs = (cmd['window'] as num?)?.toInt() ?? 3600;
                 final cutoff = DateTime.now().subtract(Duration(seconds: secs));
-                ws.sink.add(jsonEncode({
-                  'type': 'history',
-                  'data': _cacheSnapshot(cutoff),
-                }));
+                unawaited(_sendHistoryChunked(ws, _compactSnapshot(cutoff)));
               }
             } catch (e) {
               _log.warning('Bad WS message: $e');
@@ -451,7 +517,7 @@ void main(List<String> arguments) async {
           return;
         }
         _latestBroadcastTime = stats.timestamp;
-        _broadcast({'type': 'reading', 'data': stats.toJson()});
+        _broadcast({'type': 'r', 'data': _compact(stats)});
       },
       onError: (Object e, StackTrace st) {
         _log.warning('collection.updates error: $e\n$st');
@@ -1057,6 +1123,23 @@ function setChartWindow(windowSecs) {
 const _ema = {};
 const _EMA_ALPHA = 0.05;
 
+// Buffer for chunked history messages (final:false) — flushed when final:true arrives.
+let _histBuf = [];
+
+// Expand compact wire format {t, i, v:[mod,swr,pOut,pRef,hTemp,fan], s, a?}
+// back to the full named format that applyReadings/appendReading/updateMeters expect.
+// Returns the reading unchanged if it is already in full format (backward compat).
+function _expandReading(r) {
+  if (!Array.isArray(r.v)) return r;
+  const [modulation, swr, powerOut, powerRef, heatTemp, fanSpeed] = r.v;
+  return {
+    timestamp: new Date(r.t).toISOString(),
+    transmitterId: r.i,
+    modulation, swr, powerOut, powerRef, heatTemp, fanSpeed,
+    status: r.s, alertLevel: r.a ?? null,
+  };
+}
+
 function applyReadings(readings) {
   // Server may push up to 7 days; trim to the currently selected window
   // so the chart doesn't show more data than the user requested.
@@ -1130,19 +1213,26 @@ function connect() {
 
   ws.addEventListener('open', () => {
     setStatus('Connected');
+    _histBuf = []; // fresh connection — discard any stale partial buffer
     // Request initial history for the current window
     ws.send(JSON.stringify({action:'history', window: currentWindow}));
   });
 
   ws.addEventListener('message', ev => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === 'history') applyReadings(msg.data);
-    else if (msg.type === 'reading') appendReading(msg.data);
+    if (msg.type === 'history') {
+      // Accumulate chunks; flush only when final:true (or flag absent = legacy single send).
+      _histBuf.push(...msg.data.map(_expandReading));
+      if (msg.final !== false) { applyReadings(_histBuf); _histBuf = []; }
+    }
+    else if (msg.type === 'r') appendReading(_expandReading(msg.data));
+    else if (msg.type === 'reading') appendReading(msg.data); // backward compat
     else if (msg.type === 'sync') updateSync(msg.data);
     else if (msg.type === 'config') applyConfig(msg.data);
   });
 
   ws.addEventListener('close', () => {
+    _histBuf = []; // discard any partial history on disconnect
     setStatus('Disconnected — reconnecting…');
     setTimeout(connect, 3000);
   });
@@ -1164,6 +1254,7 @@ document.querySelectorAll('.toolbar button').forEach(btn => {
     currentWindow = parseInt(btn.dataset.w, 10);
     setChartWindow(currentWindow);
     if (ws && ws.readyState === WebSocket.OPEN) {
+      _histBuf = []; // discard any partial history before requesting new window
       ws.send(JSON.stringify({action:'history', window: currentWindow}));
     }
   });
