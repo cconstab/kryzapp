@@ -551,7 +551,7 @@ const _dashboardHtml = r'''
   .m-crit {color:#E53935;border-color:#E5393566}
   .m-idle {color:#aaa}
   .sync-bar{display:flex;gap:16px;align-items:center;font-size:.78rem;margin-bottom:10px;
-    padding:6px 12px;background:#1a1a1a;border-radius:6px;flex-wrap:wrap}
+    padding:6px 12px;background:#1a1a1a;border-radius:6px;flex-wrap:wrap;min-height:50px}
   .sync-bar .lbl{font-weight:600;opacity:.9}
   .sync-bar span{white-space:nowrap;opacity:.75}
   .s-ok{color:#4CAF50!important;opacity:1!important}
