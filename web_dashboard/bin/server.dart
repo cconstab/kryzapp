@@ -550,7 +550,7 @@ const _dashboardHtml = r'''
   .m-warn {color:#FF9800;border-color:#FF980066}
   .m-crit {color:#E53935;border-color:#E5393566}
   .m-idle {color:#aaa}
-  .sync-bar{display:flex;gap:16px;align-items:center;font-size:.78rem;margin-bottom:10px;
+  .sync-bar{display:flex;gap:16px;align-items:center;font-size:.78rem;margin-top:10px;
     padding:6px 12px;background:#1a1a1a;border-radius:6px;flex-wrap:wrap;min-height:50px}
   .sync-bar .lbl{font-weight:600;opacity:.9}
   .sync-bar span{white-space:nowrap;opacity:.75}
@@ -586,14 +586,6 @@ const _dashboardHtml = r'''
   <span id="lastTime" class="last-time"></span>
   <span id="status">Connecting…</span>
 </div>
-<div class="sync-bar" id="syncBar">
-  <span class="lbl">Sync</span>
-  <span>Status: <b id="syncState">—</b></span>
-  <span>Local: <b id="syncLocal">—</b></span>
-  <span>Server: <b id="syncServer">—</b></span>
-  <span id="syncDiff"></span>
-  <span id="syncPending"></span>
-</div>
 <div id="page-gauges" class="page active">
   <div class="gauge-grid" id="gaugeGrid"></div>
 </div>
@@ -605,6 +597,14 @@ const _dashboardHtml = r'''
     <button data-w="604800">7 d</button>
   </div>
   <div class="grid" id="grid"></div>
+</div>
+<div class="sync-bar" id="syncBar">
+  <span class="lbl">Sync</span>
+  <span>Status: <b id="syncState">—</b></span>
+  <span>Local: <b id="syncLocal">—</b></span>
+  <span>Server: <b id="syncServer">—</b></span>
+  <span id="syncDiff"></span>
+  <span id="syncPending"></span>
 </div>
 
 <script>
