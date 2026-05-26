@@ -178,6 +178,13 @@ class SNMPCollector {
       }
 
       logger.fine('Reading persisted successfully');
+    } on TypeError catch (e, stackTrace) {
+      // SDK internal type error (e.g. at_client getKeys returning a scalar
+      // instead of a List). This is unrecoverable for this run — exit so the
+      // OS / Docker / launchd can restart the process cleanly.
+      logger.severe(
+          'Fatal SDK TypeError — exiting for OS restart', e, stackTrace);
+      exit(1);
     } catch (e, stackTrace) {
       logger.severe('Error collecting/persisting data', e, stackTrace);
     }

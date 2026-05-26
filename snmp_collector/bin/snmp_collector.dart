@@ -1,10 +1,25 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:args/args.dart';
 import 'package:at_utils/at_logger.dart';
 import 'package:logging/logging.dart';
 import 'package:snmp_collector/collector/snmp_collector.dart';
 
-void main(List<String> arguments) async {
+void main(List<String> arguments) {
+  runZonedGuarded(
+    () => _run(arguments),
+    (e, stackTrace) {
+      // Any error that escapes all async zones (SDK internal, unhandled Future
+      // rejection, etc.) lands here.  Log it and exit so the OS can restart.
+      final logger = Logger('main');
+      logger.severe(
+          'Uncaught async error — exiting for OS restart', e, stackTrace);
+      exit(1);
+    },
+  );
+}
+
+Future<void> _run(List<String> arguments) async {
   final parser = ArgParser()
     ..addOption('atsign',
         abbr: 'a', help: 'The @sign for this collector', mandatory: true)

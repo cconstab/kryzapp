@@ -295,11 +295,6 @@ void main(List<String> arguments) async {
           ws.sink.add(jsonEncode({'type': 'history', 'data': cached}));
           _log.info('Sent ${cached.length} cached history items to new client');
         }
-        // If the history scan hasn't completed yet, trigger it now so this
-        // client doesn't have to wait for the 30-second periodic timer.
-        if (!_cacheLoaded && !_historyCacheLoading) {
-          _loadHistoryCached().ignore();
-        }
 
         // When client requests historical data it sends:
         //   {"action": "history", "window": <seconds>}
@@ -423,46 +418,43 @@ void main(List<String> arguments) async {
       await loadAndBroadcastConfig();
     });
 
+    // Force the notification listener up before opening the collection so
+    // the first event doesn't race the lazy startup inside subscribe().
     atClient.notificationService.startListening();
+
+    final collection = await atClient.collection<TransmitterStats>(
+      'stats.kryz',
+      const Duration(days: 7),
+      fromJson: TransmitterStats.fromJson,
+      typeTag: 'TransmitterStats',
+      eventSource: EventSource.data,
+    );
+    _log.info('Collection opened (stats.kryz)');
 
     // Start loading historical data into the cache in the background.
     // _loadHistoryCached() reads in batches and broadcasts partial results
     // progressively, so charts start showing data within seconds.
     _loadHistoryCached().ignore();
 
-    // Use raw notificationService.subscribe instead of AtCollection.updates +
-    // getOrNull.  The getOrNull path is broken for received keys because the
-    // SDK stores them as `cached:<receiver>:<id>.<ns>@<sender>` (two prefix
-    // segments) but _directKeyRegex only tolerates one, so getOrNull always
-    // returns null until the 30-second sync cycle rewrites the key.
-    // With raw subscribe the decrypted value arrives directly — no key lookup
-    // needed — so live readings appear instantly instead of after ~30 seconds.
-    atClient.notificationService
-        .subscribe(regex: r'.*stats.*\.kryz@.*', shouldDecrypt: true)
-        .listen(
-      (notification) {
-        if (notification.value == null) return;
-        try {
-          final env = jsonDecode(notification.value!) as Map<String, dynamic>;
-          if (env['type'] != 'TransmitterStats') return;
-          final stats =
-              TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
-          _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
-          _cacheAdd(stats);
-          if (_latestBroadcastTime != null &&
-              stats.timestamp.isBefore(_latestBroadcastTime!)) {
-            _log.fine(
-                'Out-of-order reading (${stats.timestamp}) — added to cache, skipping live broadcast');
-            return;
-          }
-          _latestBroadcastTime = stats.timestamp;
-          _broadcast({'type': 'reading', 'data': stats.toJson()});
-        } catch (e) {
-          _log.warning('Notification parse error: $e');
+    collection.updates.listen(
+      (event) async {
+        final citem = await collection.getOrNull(event.id, event.owner);
+        if (citem == null) return;
+        final stats = citem.obj;
+        _log.fine('New reading: ${stats.transmitterId} @ ${stats.timestamp}');
+        // Always add to cache so it appears in history.
+        _cacheAdd(stats);
+        if (_latestBroadcastTime != null &&
+            stats.timestamp.isBefore(_latestBroadcastTime!)) {
+          _log.fine(
+              'Out-of-order reading (${stats.timestamp}) — added to cache, skipping live broadcast');
+          return;
         }
+        _latestBroadcastTime = stats.timestamp;
+        _broadcast({'type': 'reading', 'data': stats.toJson()});
       },
       onError: (Object e, StackTrace st) {
-        _log.warning('notificationService.subscribe error: $e\n$st');
+        _log.warning('collection.updates error: $e\n$st');
       },
       cancelOnError: false,
     );
