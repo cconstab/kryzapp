@@ -63,7 +63,8 @@ class _GaugeWidgetState extends State<GaugeWidget>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.value != widget.value) {
       _controller.animateWith(
-        SpringSimulation(_spring, _controller.value, _normalize(widget.value), 0),
+        SpringSimulation(
+            _spring, _controller.value, _normalize(widget.value), 0),
       );
     }
   }

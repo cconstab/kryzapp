@@ -63,12 +63,19 @@ List<Map<String, dynamic>> _cacheSnapshot(DateTime cutoff) => _historyCache
 /// Field order in [v] matches the METRICS array order in the browser JS:
 /// [modulation, swr, powerOut, powerRef, heatTemp, fanSpeed].
 Map<String, dynamic> _compact(TransmitterStats s) => {
-  't': s.timestamp.millisecondsSinceEpoch,
-  'i': s.transmitterId,
-  'v': [s.modulation, s.swr, s.powerOut, s.powerRef, s.heatTemp, s.fanSpeed],
-  's': s.status,
-  if (s.alertLevel != null) 'a': s.alertLevel,
-};
+      't': s.timestamp.millisecondsSinceEpoch,
+      'i': s.transmitterId,
+      'v': [
+        s.modulation,
+        s.swr,
+        s.powerOut,
+        s.powerRef,
+        s.heatTemp,
+        s.fanSpeed
+      ],
+      's': s.status,
+      if (s.alertLevel != null) 'a': s.alertLevel,
+    };
 
 List<Map<String, dynamic>> _compactSnapshot(DateTime cutoff) => _historyCache
     .where((s) => s.timestamp.isAfter(cutoff))
@@ -425,7 +432,8 @@ void main(List<String> arguments) async {
       ..namespace = 'kryz'
       ..hiveStoragePath = '.atsign/storage/$atSign'
       ..commitLogPath = '.atsign/storage/$atSign/commitLog'
-      ..atKeysFilePath = keysPath;
+      ..atKeysFilePath = keysPath
+      ..fetchOfflineNotifications = false;
 
     final onboarding = cli.AtOnboardingServiceImpl(atSign, pref);
     if (!await onboarding.authenticate()) {
