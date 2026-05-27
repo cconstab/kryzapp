@@ -28,7 +28,7 @@ class TransmitterStats {
   Map<String, dynamic> toJson() {
     return {
       'transmitterId': transmitterId,
-      'timestamp': timestamp.toIso8601String(),
+      'timestamp': timestamp.toUtc().toIso8601String(),
       'modulation': modulation,
       'swr': swr,
       'powerOut': powerOut,

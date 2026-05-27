@@ -1137,11 +1137,23 @@ let _histBuf = [];
 // Expand compact wire format {t, i, v:[mod,swr,pOut,pRef,hTemp,fan], s, a?}
 // back to the full named format that applyReadings/appendReading/updateMeters expect.
 // Returns the reading unchanged if it is already in full format (backward compat).
+// Ensure a timestamp string is always parsed as UTC.
+// Dart's toIso8601String() omits the Z suffix for local DateTimes, which
+// Chrome then treats as *local* time rather than UTC — causing a 7-hour
+// (PDT) offset.  Appending 'Z' when absent makes the parse unambiguous.
+function _normaliseTs(ts) {
+  if (!ts) return ts;
+  return /[Zz]|[+-]\d\d:?\d\d$/.test(ts) ? ts : ts + 'Z';
+}
+
 function _expandReading(r) {
-  if (!Array.isArray(r.v)) return r;
+  if (!Array.isArray(r.v)) {
+    // Backward-compat: full-format reading — just normalise the timestamp.
+    return Object.assign({}, r, {timestamp: _normaliseTs(r.timestamp)});
+  }
   const [modulation, swr, powerOut, powerRef, heatTemp, fanSpeed] = r.v;
   return {
-    timestamp: new Date(r.t).toISOString(),
+    timestamp: new Date(r.t).toISOString(), // epoch ms → always UTC with Z
     transmitterId: r.i,
     modulation, swr, powerOut, powerRef, heatTemp, fanSpeed,
     status: r.s, alertLevel: r.a ?? null,
