@@ -34,13 +34,14 @@ class GaugeWidget extends StatefulWidget {
 
 class _GaugeWidgetState extends State<GaugeWidget>
     with SingleTickerProviderStateMixin {
-  // Spring parameters matching the web dashboard's analog-needle feel.
-  // The controller runs in normalised [0,1] space so the spring is
-  // independent of each metric's physical range (e.g. 0–120 % vs 1–3.5 SWR).
-  // ω₀ = √180 ≈ 13.4 rad/s → half-period ≈ 0.47 s; ζ = 20/(2·13.4) ≈ 0.75
-  // → slightly underdamped: settles in ~0.4 s with a tiny graceful overshoot.
+  // Spring parameters tuned to match the web dashboard's bounce feel.
+  // Web uses: vel += (target-rot)*0.028; vel *= 0.90  (per 60 fps frame)
+  // → stiffness_real = 0.028 × 60² ≈ 100, damping_real = 0.10 × 60 = 6
+  // → ζ = 6 / (2·√100) ≈ 0.30  →  ~37 % overshoot, settles in ~1.5 s.
+  // The controller runs in normalised [0,1] space so physics is independent
+  // of each metric's physical range (0–120 % vs 1–3.5 SWR, etc.).
   static const _spring =
-      SpringDescription(mass: 1.0, stiffness: 180, damping: 20);
+      SpringDescription(mass: 1.0, stiffness: 100, damping: 6);
 
   // Controller drives a normalised [0,1] needle position; we map back to
   // physical units in build().  Unbounded so overshoot past [0,1] is allowed.

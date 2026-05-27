@@ -77,10 +77,10 @@ packages:
     dependency: "direct main"
     description:
       name: at_client
-      sha256: "41414a65ae3355a6d09f8d841a27f4c84d9f96ab005b2ccd8a1917ec804f4e18"
+      sha256: "4c317a3f1bd7342c72c63c46f1bd23ee7f258f8e8b0519b63547586e15bd94bb"
       url: "https://pub.dev"
     source: hosted
-    version: "3.12.0-rc.1"
+    version: "3.12.0-rc.2"
   at_commons:
     dependency: transitive
     description:
