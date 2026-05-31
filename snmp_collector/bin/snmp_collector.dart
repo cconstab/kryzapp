@@ -57,7 +57,11 @@ Future<void> _run(List<String> arguments) async {
   // The only effective control is AtSignLogger.root_level, which is read when
   // each SDK logger is constructed.  Set it BEFORE collector.initialize() so
   // all SDK loggers default to SEVERE in non-verbose mode.
-  if (!verbose) AtSignLogger.root_level = 'severe';
+  if (!verbose) {
+    AtSignLogger.root_level = 'severe';
+  } else {
+    AtSignLogger.root_level = 'finest';
+  }
   // Our own loggers use the standard hierarchy and reach root.
   Logger.root.level = Level.ALL;
   Logger.root.onRecord.listen((record) {
