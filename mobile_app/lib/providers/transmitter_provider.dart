@@ -60,6 +60,11 @@ class TransmitterProvider extends ChangeNotifier {
   StreamSubscription<dynamic>? _oneHourNotifSub;
   SyncProgressListener? _syncListener;
 
+  // Keys whose raw-tier values have been loaded into _historyCache
+  // (toString() of AtKey).  Used by _pollNewRawKeys to find genuinely new
+  // keys without re-fetching the entire 7-day history on every sync.
+  final Set<String> _scannedKeys = {};
+
   static const int maxHistoryLength = 100;
   static const Duration dataTimeout = Duration(minutes: 1);
 
@@ -130,13 +135,10 @@ class TransmitterProvider extends ChangeNotifier {
   /// each sync completes) — `_historyCacheLoading` prevents overlapping
   /// runs and `_cacheAdd` deduplicates new readings against the existing
   /// cache, so repeat invocations are cheap and idempotent.
-  ///
-  /// [quiet] — when true the progress bar is suppressed (used for background
-  /// post-sync refreshes so the loading indicator does not flash every 30 s).
-  Future<void> _loadHistoryCached({bool quiet = false}) async {
+  Future<void> _loadHistoryCached() async {
     if (_atClient == null || _historyCacheLoading) return;
     _historyCacheLoading = true;
-    if (!quiet) historyLoadProgress.value = 0.0;
+    historyLoadProgress.value = 0.0;
     try {
       // Matches:  [cached:][<receiver>:]<id>.stats[5m|1h].kryz@<sender>
       final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
@@ -161,6 +163,11 @@ class TransmitterProvider extends ChangeNotifier {
       const batchSize = 20;
       for (var i = 0; i < keys.length; i += batchSize) {
         final batch = keys.sublist(i, (i + batchSize).clamp(0, keys.length));
+        // Record keys as scanned before fetching so _pollNewRawKeys skips them
+        // even if the fetch fails.
+        for (final k in batch) {
+          _scannedKeys.add(k.toString());
+        }
         final results = await Future.wait(
           batch.map((key) async {
             try {
@@ -237,7 +244,48 @@ class TransmitterProvider extends ChangeNotifier {
       debugPrint('TransmitterProvider._loadHistoryCached error: $e');
     } finally {
       _historyCacheLoading = false;
-      if (!quiet) historyLoadProgress.value = null; // hide the bar when done
+      historyLoadProgress.value = null;
+    }
+  }
+
+  /// Incremental poll for raw stats.kryz keys that appeared since the initial
+  /// full scan — mirrors the server's _pollNewKeys logic.
+  ///
+  /// Called after each sync to pick up raw readings missed while the app was
+  /// backgrounded (the notification stream may be suspended by the OS).
+  /// [getAtKeys] is fast (local Hive index, no network); only genuinely new
+  /// keys need a `get()`, so this is cheap compared with the full initial scan.
+  Future<void> _pollNewRawKeys() async {
+    if (_atClient == null) return;
+    try {
+      final allKeys =
+          await _atClient!.getAtKeys(regex: r'stats\.kryz@');
+      final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
+      bool added = false;
+      for (final k in allKeys) {
+        final ks = k.toString();
+        if (_scannedKeys.contains(ks)) continue;
+        _scannedKeys.add(ks); // claim before fetch so concurrent polls skip it
+        try {
+          final val = await _atClient!.get(k);
+          if (val.value == null) continue;
+          final env =
+              jsonDecode(val.value as String) as Map<String, dynamic>;
+          if (env['type'] != 'TransmitterStats') continue;
+          final stats = TransmitterStats.fromJson(
+              env['obj'] as Map<String, dynamic>);
+          if (!stats.timestamp.isAfter(cutoff7d)) continue;
+          _cacheAdd(stats, broadcast: false);
+          added = true;
+          debugPrint('TransmitterProvider: new raw key '
+              '${stats.transmitterId} @ ${stats.timestamp}');
+        } catch (_) {}
+      }
+      if (added && !_historyController.isClosed) {
+        _historyController.add(List.unmodifiable(_historyCache));
+      }
+    } catch (e) {
+      debugPrint('TransmitterProvider._pollNewRawKeys error: $e');
     }
   }
 
@@ -257,18 +305,20 @@ class TransmitterProvider extends ChangeNotifier {
     // no getAtKeys regex scanning needed.
     _openTierCollections(atClient).ignore();
 
-    // After each sync, re-scan all Hive stats keys so that:
-    //  • raw readings missed while the app was backgrounded are picked up
-    //  • new 5m/1h aggregate keys pulled by sync appear on the charts
-    // _loadHistoryCached deduplicates against the existing cache so it is
-    // safe to call on every sync.  quiet:true suppresses the progress bar
-    // so the loading indicator does not flash every 30 seconds.
+    // After each sync:
+    //  1. _refreshTierCollections — fast getItems() sweep for new 5m/1h
+    //     aggregate keys that the live notification stream may have missed.
+    //  2. _pollNewRawKeys — fast incremental scan for raw stats.kryz keys
+    //     that arrived while the app was backgrounded.  Only keys not yet in
+    //     _scannedKeys are fetched, so this is essentially free once the
+    //     initial full scan has completed.
     _syncListener = _ProviderSyncListener((progress) {
       if (progress.syncStatus == SyncStatus.success ||
           progress.syncStatus == SyncStatus.failure) {
         debugPrint('TransmitterProvider: sync ${progress.syncStatus} → '
-            'reloading history cache (all tiers)');
-        _loadHistoryCached(quiet: true).ignore();
+            'refreshing tier collections + polling new raw keys');
+        _refreshTierCollections().ignore();
+        _pollNewRawKeys().ignore();
       }
     });
     atClient.syncService.addProgressListener(_syncListener!);
