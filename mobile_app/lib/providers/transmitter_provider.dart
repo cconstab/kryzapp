@@ -130,10 +130,13 @@ class TransmitterProvider extends ChangeNotifier {
   /// each sync completes) — `_historyCacheLoading` prevents overlapping
   /// runs and `_cacheAdd` deduplicates new readings against the existing
   /// cache, so repeat invocations are cheap and idempotent.
-  Future<void> _loadHistoryCached() async {
+  ///
+  /// [quiet] — when true the progress bar is suppressed (used for background
+  /// post-sync refreshes so the loading indicator does not flash every 30 s).
+  Future<void> _loadHistoryCached({bool quiet = false}) async {
     if (_atClient == null || _historyCacheLoading) return;
     _historyCacheLoading = true;
-    historyLoadProgress.value = 0.0;
+    if (!quiet) historyLoadProgress.value = 0.0;
     try {
       // Matches:  [cached:][<receiver>:]<id>.stats[5m|1h].kryz@<sender>
       final keys = await _atClient!.getAtKeys(regex: r'stats(5m|1h)?\.kryz@');
@@ -234,7 +237,7 @@ class TransmitterProvider extends ChangeNotifier {
       debugPrint('TransmitterProvider._loadHistoryCached error: $e');
     } finally {
       _historyCacheLoading = false;
-      historyLoadProgress.value = null; // hide the bar when done
+      if (!quiet) historyLoadProgress.value = null; // hide the bar when done
     }
   }
 
@@ -254,17 +257,18 @@ class TransmitterProvider extends ChangeNotifier {
     // no getAtKeys regex scanning needed.
     _openTierCollections(atClient).ignore();
 
-    // After each sync, refresh tier collections from Hive — sync may have
-    // pulled new 5m/1h aggregate keys that the live notification stream
-    // would otherwise miss until the next roll-up.  The full Hive key scan
-    // (_loadHistoryCached) only runs once at startup; subsequent syncs are
-    // cheap because _refreshTierCollections only reads the two tier collections.
+    // After each sync, re-scan all Hive stats keys so that:
+    //  • raw readings missed while the app was backgrounded are picked up
+    //  • new 5m/1h aggregate keys pulled by sync appear on the charts
+    // _loadHistoryCached deduplicates against the existing cache so it is
+    // safe to call on every sync.  quiet:true suppresses the progress bar
+    // so the loading indicator does not flash every 30 seconds.
     _syncListener = _ProviderSyncListener((progress) {
       if (progress.syncStatus == SyncStatus.success ||
           progress.syncStatus == SyncStatus.failure) {
         debugPrint('TransmitterProvider: sync ${progress.syncStatus} → '
-            'refreshing tier collections');
-        _refreshTierCollections().ignore();
+            'reloading history cache (all tiers)');
+        _loadHistoryCached(quiet: true).ignore();
       }
     });
     atClient.syncService.addProgressListener(_syncListener!);

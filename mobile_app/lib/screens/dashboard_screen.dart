@@ -17,7 +17,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   Timer? _clockTimer;
   bool _alertActive = false; // Track if alert is currently active
   bool _alertAcknowledged = false; // Track if user has acknowledged this alert
@@ -25,6 +26,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupNotificationListeners();
     _syncConfigWithAtProtocol();
     _startClockTimer();
@@ -32,8 +34,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
     super.dispose();
+  }
+
+  /// When the app returns to the foreground, force an immediate sync so that
+  /// raw readings missed while backgrounded are pulled from the atServer into
+  /// local Hive.  The sync completion triggers TransmitterProvider's sync
+  /// listener, which calls _loadHistoryCached to merge all new keys (raw +
+  /// 5m + 1h tiers) into the in-memory history cache and re-emit the stream
+  /// so charts fill in with the missing data.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final atService = Provider.of<AtService>(context, listen: false);
+      if (atService.atClient != null) {
+        atService.atClient!.syncService.sync();
+      }
+    }
   }
 
   void _startClockTimer() {
@@ -82,10 +101,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _showAlertDialog(alert);
       }
     };
-  }
-
-  String _hashAlert(Map<String, dynamic> alert) {
-    return '${alert['message']}_${alert['level']}';
   }
 
   void _syncConfigWithAtProtocol() async {

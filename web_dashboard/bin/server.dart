@@ -82,6 +82,51 @@ List<Map<String, dynamic>> _compactSnapshot(DateTime cutoff) => _historyCache
     .map(_compact)
     .toList();
 
+/// Minimum inter-point interval for history snapshots sent to the browser.
+///
+/// The in-memory cache holds ALL three storage tiers (raw 2 s, 5-min, 1-hour).
+/// For a 7-day window that can be 300 k+ raw points — enough to lock the
+/// browser's main thread for 10–20 s while Chart.js processes them.
+///
+/// By applying a minimum interval we select roughly the right tier for each
+/// window without needing separate per-tier caches:
+///
+/// | Window | min-interval | Approx points sent |
+/// |--------|--------------|--------------------|
+/// | 1 h    | none         | ~1 800 raw         |
+/// | 6 h    | 1 min        | ~438               |
+/// | 24 h   | 2 min        | ~1 032             |
+/// | 7 d    | 20 min       | ~1 176             |
+Duration _minIntervalForWindow(int windowSecs) {
+  if (windowSecs > 86400) return const Duration(minutes: 20); // 7 d
+  if (windowSecs > 21600) return const Duration(minutes: 2); //  24 h
+  if (windowSecs > 3600) return const Duration(minutes: 1); //   6 h
+  return Duration
+      .zero; //                                         1 h — no filter
+}
+
+/// Compact snapshot filtered to [cutoff] and downsampled for [windowSecs].
+///
+/// Points closer together than [_minIntervalForWindow] are skipped so the
+/// browser receives at most ~1 200 points regardless of the window size,
+/// keeping Chart.js responsive even with a full week of 2-second readings.
+List<Map<String, dynamic>> _compactSnapshotForWindow(
+    DateTime cutoff, int windowSecs) {
+  final minInterval = _minIntervalForWindow(windowSecs);
+  if (minInterval == Duration.zero) return _compactSnapshot(cutoff);
+  final result = <Map<String, dynamic>>[];
+  DateTime? lastTs;
+  for (final s in _historyCache) {
+    if (s.timestamp.isBefore(cutoff)) continue;
+    if (lastTs != null && s.timestamp.difference(lastTs) < minInterval) {
+      continue;
+    }
+    result.add(_compact(s));
+    lastTs = s.timestamp;
+  }
+  return result;
+}
+
 /// Send [compact] readings to a single [client] in 100-item chunks, yielding
 /// to the Dart event loop between chunks so live 'r' messages can interleave
 /// in the TCP stream and the browser sees updates on slow links.
@@ -193,10 +238,14 @@ Future<void> _loadHistoryCached() async {
     sw.stop();
     _log.info(
         'History scan complete: ${_historyCache.length} readings in ${sw.elapsedMilliseconds}ms');
-    // Broadcast the complete sorted dataset in chunks so live 'r' messages
-    // can interleave between chunks on slow links.
+    // Broadcast the 7-day downsampled snapshot so clients that connected
+    // before the cache was ready see historical data.  Using downsampled data
+    // (~1 200 pts) rather than the raw 300 k+ keeps the browser responsive.
+    // Clients on the 1-hour tab will overwrite this with raw data when they
+    // send their own {action:'history', window:3600} request.
     if (_clients.isNotEmpty) {
-      await _broadcastHistoryChunked(_compactSnapshot(cutoff7d));
+      await _broadcastHistoryChunked(
+          _compactSnapshotForWindow(cutoff7d, 604800));
     }
   } catch (e) {
     _log.warning('_loadHistoryCached error: $e');
@@ -263,22 +312,6 @@ Future<void> _pollNewKeys() async {
 // ── History broadcast ────────────────────────────────────────────────────────
 // Tracked so we can detect out-of-order readings from sync.
 DateTime? _latestBroadcastTime;
-
-/// Push history to all connected clients (serves from cache; triggers a
-/// background cache load only if the initial scan hasn't run yet).
-Future<void> _pushHistoryAll(int secs) async {
-  if (_clients.isEmpty) return;
-  final cutoff = DateTime.now().subtract(Duration(seconds: secs));
-  final compact = _compactSnapshot(cutoff);
-  if (compact.isNotEmpty) {
-    _log.info('History push: ${compact.length} readings (${secs}s window) '
-        'to ${_clients.length} client(s)');
-    await _broadcastHistoryChunked(compact);
-  }
-  // Trigger the initial load if it hasn't run yet (e.g. client connected
-  // before auth completed) — but never re-run once _cacheLoaded is set.
-  if (!_cacheLoaded && !_historyCacheLoading) _loadHistoryCached().ignore();
-}
 
 void _broadcast(Object message) {
   final encoded = message is String ? message : jsonEncode(message);
@@ -362,14 +395,19 @@ void main(List<String> arguments) async {
         if (_lastConfigPayload != null) {
           ws.sink.add(jsonEncode(_lastConfigPayload));
         }
-        // Send whatever is already in the cache immediately (chunked so live
-        // 'r' messages can interleave between chunks on slow links).
-        final compact =
-            _compactSnapshot(DateTime.now().subtract(const Duration(days: 7)));
+        // Send whatever is already in the cache immediately, downsampled to
+        // the 7-day window resolution (~1 200 points max).  The browser will
+        // immediately follow up with an explicit {action:'history', window:X}
+        // request for its current window — that response overwrites this
+        // coarse snapshot with correctly-tiered data for the selected window.
+        // Using the downsampled snapshot here prevents sending 300 k+ raw
+        // points to every new client before they can even request their window.
+        final compact = _compactSnapshotForWindow(
+            DateTime.now().subtract(const Duration(days: 7)), 604800);
         if (compact.isNotEmpty) {
           unawaited(_sendHistoryChunked(ws, compact));
           _log.info(
-              'Sending ${compact.length} cached history items to new client (chunked)');
+              'Sending ${compact.length} cached history items to new client (chunked, downsampled)');
         }
 
         // When client requests historical data it sends:
@@ -381,7 +419,11 @@ void main(List<String> arguments) async {
               if (cmd['action'] == 'history') {
                 final secs = (cmd['window'] as num?)?.toInt() ?? 3600;
                 final cutoff = DateTime.now().subtract(Duration(seconds: secs));
-                unawaited(_sendHistoryChunked(ws, _compactSnapshot(cutoff)));
+                // Apply per-window downsampling: wide windows select only the
+                // appropriate aggregate tier so Chart.js receives at most
+                // ~1 200 points (not 300 k raw readings for the 7-day window).
+                unawaited(_sendHistoryChunked(
+                    ws, _compactSnapshotForWindow(cutoff, secs)));
               }
             } catch (e) {
               _log.warning('Bad WS message: $e');
@@ -407,17 +449,16 @@ void main(List<String> arguments) async {
   _log.info(
       'Open that URL in any browser — no atSign required in the browser.');
 
-  // Safety-net: push 7-day history to all connected clients every 30 seconds.
-  // This catches cases where sync completed AFTER the initial per-client push
-  // (e.g., large initial sync on a fresh installation) and ensures historical
-  // data appears within at most 30 seconds of sync completing.
+  // Safety-net: force a sync and poll for new keys every 30 seconds.
+  // History is no longer broadcast proactively — clients request their own
+  // window via {action:'history'} and live readings arrive as 'r' messages.
+  // Removing the periodic _pushHistoryAll prevents sending 300 k+ raw points
+  // to all connected clients (regardless of their selected window) every 30 s,
+  // which was the primary cause of the browser locking up on wide windows.
   Timer.periodic(const Duration(seconds: 30), (_) {
     // Force a sync cycle so new readings arrive even if the notification
     // WebSocket connection has silently dropped.
     _atClient?.syncService.sync();
-    if (_clients.isNotEmpty) {
-      _pushHistoryAll(604800).ignore();
-    }
     // After the initial scan, poll for any keys that arrived since the scan
     // completed.  This is the reliable realtime path — it works even when
     // collection.updates stops firing.
@@ -569,14 +610,12 @@ class _SyncProgressBroadcaster extends SyncProgressListener {
     };
     _broadcast(_lastSyncStatus!);
 
-    // After a successful sync, push fresh history to all connected clients.
-    // This is the primary mechanism for delivering historical data that wasn't
-    // yet in the local store when clients first connected.
-    if (syncProgress.syncStatus == SyncStatus.success) {
-      // Push the full 7-day window so clients on any time-window tab get
-      // their data.  applyReadings in the browser filters to currentWindow.
-      _pushHistoryAll(604800).ignore();
-    }
+    // New readings that arrived during sync are broadcast via individual 'r'
+    // messages from collection.updates.listen and _pollNewKeys — no full
+    // history re-push needed here.  Proactively pushing 7 days of history
+    // to ALL connected clients on every sync (regardless of their selected
+    // window) was pushing 300 k+ raw points and causing the browser to lock
+    // up, so it has been removed.
   }
 }
 
