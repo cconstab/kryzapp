@@ -258,8 +258,7 @@ class TransmitterProvider extends ChangeNotifier {
   Future<void> _pollNewRawKeys() async {
     if (_atClient == null) return;
     try {
-      final allKeys =
-          await _atClient!.getAtKeys(regex: r'stats\.kryz@');
+      final allKeys = await _atClient!.getAtKeys(regex: r'stats\.kryz@');
       final cutoff7d = DateTime.now().subtract(const Duration(days: 7));
       bool added = false;
       for (final k in allKeys) {
@@ -269,11 +268,10 @@ class TransmitterProvider extends ChangeNotifier {
         try {
           final val = await _atClient!.get(k);
           if (val.value == null) continue;
-          final env =
-              jsonDecode(val.value as String) as Map<String, dynamic>;
+          final env = jsonDecode(val.value as String) as Map<String, dynamic>;
           if (env['type'] != 'TransmitterStats') continue;
-          final stats = TransmitterStats.fromJson(
-              env['obj'] as Map<String, dynamic>);
+          final stats =
+              TransmitterStats.fromJson(env['obj'] as Map<String, dynamic>);
           if (!stats.timestamp.isAfter(cutoff7d)) continue;
           _cacheAdd(stats, broadcast: false);
           added = true;
