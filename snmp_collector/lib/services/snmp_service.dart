@@ -59,7 +59,7 @@ class SNMPService {
     }
 
     try {
-      logger.fine('Collecting stats from $host:$port via SNMP');
+      logger.info('Collecting stats from $host:$port via SNMP');
 
       // Query all OIDs SYNCHRONOUSLY to avoid overloading SNMP server
       final modulation = await _queryOid(oidModulation, divisor: 1000);
@@ -134,7 +134,12 @@ class SNMPService {
   Future<double?> _queryOid(String oid, {int divisor = 1}) async {
     try {
       final oidObj = snmp.Oid.fromString(oid);
-      final message = await _session.get(oidObj);
+      // 5-second timeout: dart_snmp sends UDP and waits for a response with no
+      // built-in timeout.  Without this the process hangs forever if the
+      // transmitter does not respond (wrong host, community, or OID).
+      final message = await _session
+          .get(oidObj)
+          .timeout(const Duration(seconds: 5));
 
       if (message.pdu.error.value != 0) {
         logger.warning('SNMP error for OID $oid: ${message.pdu.error}');
