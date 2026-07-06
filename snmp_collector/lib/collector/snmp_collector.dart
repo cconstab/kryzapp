@@ -71,11 +71,6 @@ class SNMPCollector {
 
     // Get the authenticated atClient
     atClient = AtClientManager.getInstance().atClient;
-    // Write directly to the remote secondary on every put/delete — no waiting
-    // for the background sync timer.  The change is then pulled back to local
-    // Hive by the sync process, so local storage stays consistent.
-    atClient.setPreferences(
-        AtClientPreference()..remoteLocalPref = RemoteLocalPref.remoteOnly);
 
     logger.info('atClient initialised and authenticated successfully');
 
@@ -87,7 +82,19 @@ class SNMPCollector {
       atClient: atClient,
       receivers: receiverAtsigns,
     );
+    logger.info('Opening tiered collections…');
     await collectionService.initialize();
+    logger.info('Tiered collections ready');
+
+    // Switch to remote-only writes AFTER collections are opened.
+    // Setting this before collection init resets the client namespace to ''
+    // (AtClientPreference() defaults) and may trigger a reconnect that
+    // deadlocks during startup.  Collections are opened with default
+    // (local-first) settings; subsequent writes use remote-only so each
+    // reading is pushed to the atServer without waiting for the sync timer.
+    atClient.setPreferences(
+        AtClientPreference()..remoteLocalPref = RemoteLocalPref.remoteOnly);
+    logger.info('Remote-only write mode enabled');
 
     // Initialise alert service (urgent alerts still use notification API)
     alertService = AtNotificationService(atClient: atClient);

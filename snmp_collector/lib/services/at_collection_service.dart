@@ -56,33 +56,44 @@ class AtCollectionService {
 
     atClient.notificationService.startListening();
 
+    // The collector is a pure WRITER — it never needs to receive items from
+    // others.  EventSource.notifs is used (rather than EventSource.data) to
+    // avoid the initial remote-secondary key scan that EventSource.data
+    // triggers, which can hang indefinitely on startup.
+
     // Raw — live gauges + recent tail of the 1-hour chart.  Very short TTL
     // keeps the key count tiny (~300 keys at 2 s poll rate).
+    _logger.info('Opening raw collection (stats.kryz)…');
     _rawCollection = await atClient.collection<TransmitterStats>(
       'stats.kryz',
       const Duration(minutes: 10),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
-      eventSource: EventSource.data,
+      eventSource: EventSource.notifs,
     );
+    _logger.info('Raw collection ready');
 
     // 5-minute averages — 6-hour and 24-hour charts.
+    _logger.info('Opening 5-min collection (stats5m.kryz)…');
     _fiveMinCollection = await atClient.collection<TransmitterStats>(
       'stats5m.kryz',
       const Duration(hours: 26),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
-      eventSource: EventSource.data,
+      eventSource: EventSource.notifs,
     );
+    _logger.info('5-min collection ready');
 
     // 1-hour averages — 7-day chart.
+    _logger.info('Opening 1-hour collection (stats1h.kryz)…');
     _oneHourCollection = await atClient.collection<TransmitterStats>(
       'stats1h.kryz',
       const Duration(days: 8),
       fromJson: TransmitterStats.fromJson,
       typeTag: 'TransmitterStats',
-      eventSource: EventSource.data,
+      eventSource: EventSource.notifs,
     );
+    _logger.info('1-hour collection ready');
 
     _logger.info('Tiered AtCollection storage initialised '
         '(raw 10 min / 5-min 26 h / 1-hour 8 d)');

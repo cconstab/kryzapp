@@ -14,12 +14,17 @@ class SNMPService {
   final bool useSimulatedData;
 
   // KRYZ Transmitter SNMP OIDs
-  static const String oidModulation = '1.3.6.1.4.1.28142.1.300.1025.291.0'; // Div Peak (%)
+  static const String oidModulation =
+      '1.3.6.1.4.1.28142.1.300.1025.291.0'; // Div Peak (%)
   static const String oidSWR = '1.3.6.1.4.1.28142.1.300.256.303.0'; // SWR
-  static const String oidPowerOut = '1.3.6.1.4.1.28142.1.300.256.256.0'; // Power Out (Watts)
-  static const String oidPowerRef = '1.3.6.1.4.1.28142.1.300.256.257.0'; // Power Ref (Watts)
-  static const String oidHeatTemp = '1.3.6.1.4.1.28142.1.300.256.271.0'; // HeatSink Temp (°C)
-  static const String oidFanSpeed = '1.3.6.1.4.1.28142.1.300.256.281.0'; // Fan Speed (RPM)
+  static const String oidPowerOut =
+      '1.3.6.1.4.1.28142.1.300.256.256.0'; // Power Out (Watts)
+  static const String oidPowerRef =
+      '1.3.6.1.4.1.28142.1.300.256.257.0'; // Power Ref (Watts)
+  static const String oidHeatTemp =
+      '1.3.6.1.4.1.28142.1.300.256.271.0'; // HeatSink Temp (°C)
+  static const String oidFanSpeed =
+      '1.3.6.1.4.1.28142.1.300.256.281.0'; // Fan Speed (RPM)
 
   final Random _random = Random();
   dynamic _session;
@@ -35,13 +40,15 @@ class SNMPService {
   Future<void> initialize() async {
     if (!useSimulatedData) {
       try {
-        logger.info('Initializing SNMP session for $host:$port with community: $community');
+        logger.info(
+            'Initializing SNMP session for $host:$port with community: $community');
 
         // Create InternetAddress from host string
         final target = InternetAddress(host);
 
         // Create session with the target - dart_snmp 3.0.1 API
-        _session = await snmp.Snmp.createSession(target, community: community, port: port);
+        _session = await snmp.Snmp.createSession(target,
+            community: community, port: port);
 
         logger.info('SNMP session initialized successfully');
       } catch (e, stack) {
@@ -64,37 +71,43 @@ class SNMPService {
       // Query all OIDs SYNCHRONOUSLY to avoid overloading SNMP server
       final modulation = await _queryOid(oidModulation, divisor: 1000);
       if (modulation == null) {
-        logger.warning('Failed to get modulation value, skipping this collection cycle');
+        logger.warning(
+            'Failed to get modulation value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
       final swr = await _queryOid(oidSWR, divisor: 1000);
       if (swr == null) {
-        logger.warning('Failed to get SWR value, skipping this collection cycle');
+        logger
+            .warning('Failed to get SWR value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
       final powerOut = await _queryOid(oidPowerOut, divisor: 1000);
       if (powerOut == null) {
-        logger.warning('Failed to get power out value, skipping this collection cycle');
+        logger.warning(
+            'Failed to get power out value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
       final powerRef = await _queryOid(oidPowerRef, divisor: 1000);
       if (powerRef == null) {
-        logger.warning('Failed to get power ref value, skipping this collection cycle');
+        logger.warning(
+            'Failed to get power ref value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
       final heatTemp = await _queryOid(oidHeatTemp, divisor: 1000);
       if (heatTemp == null) {
-        logger.warning('Failed to get heat temp value, skipping this collection cycle');
+        logger.warning(
+            'Failed to get heat temp value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
       final fanSpeed = await _queryOid(oidFanSpeed, divisor: 1);
       if (fanSpeed == null) {
-        logger.warning('Failed to get fan speed value, skipping this collection cycle');
+        logger.warning(
+            'Failed to get fan speed value, skipping this collection cycle');
         throw Exception('SNMP query failed - no valid data');
       }
 
@@ -137,9 +150,8 @@ class SNMPService {
       // 5-second timeout: dart_snmp sends UDP and waits for a response with no
       // built-in timeout.  Without this the process hangs forever if the
       // transmitter does not respond (wrong host, community, or OID).
-      final message = await _session
-          .get(oidObj)
-          .timeout(const Duration(seconds: 5));
+      final message =
+          await _session.get(oidObj).timeout(const Duration(seconds: 5));
 
       if (message.pdu.error.value != 0) {
         logger.warning('SNMP error for OID $oid: ${message.pdu.error}');
@@ -156,7 +168,8 @@ class SNMPService {
       } else if (varbind.value is BigInt) {
         intValue = (varbind.value as BigInt).toInt();
       } else {
-        logger.warning('Unexpected value type for OID $oid: ${varbind.value.runtimeType}');
+        logger.warning(
+            'Unexpected value type for OID $oid: ${varbind.value.runtimeType}');
         return null; // Return null instead of 0.0 to indicate failure
       }
 
@@ -177,16 +190,19 @@ class SNMPService {
 
     // Simulate values within normal operating ranges (matching gauge defaults)
     // Modulation: 0-120%, normal 60-104%, warn <60 or >104, critical <50 or >105
-    final modulation = 70.0 + (random % 25); // 70-95% (well within normal green zone)
+    final modulation =
+        70.0 + (random % 25); // 70-95% (well within normal green zone)
 
     // SWR: 1.0-3.5:1, normal <2.0, warn >2.0, critical >2.5
-    final swr = 1.1 + (random % 30) / 100; // 1.1-1.4 (good range, well below warning)
+    final swr =
+        1.1 + (random % 30) / 100; // 1.1-1.4 (good range, well below warning)
 
     // Power Out: 0-20W, normal 8-12W, warn <8 or >12, critical <5 or >15
     final powerOut = 9.0 + (random % 3); // 9-12W (normal operating range)
 
     // Power Ref: 0-5W, normal <1.0, warn >1.0, critical >2.0
-    final powerRef = 0.3 + (random % 50) / 100; // 0.3-0.8W (good, low reflection)
+    final powerRef =
+        0.3 + (random % 50) / 100; // 0.3-0.8W (good, low reflection)
 
     // Heat Temp: 0-100°C, normal 15-75°C, warn <15/>75, critical <10/>90
     final heatTemp = 40.0 + (random % 25); // 40-65°C (normal operating temp)
