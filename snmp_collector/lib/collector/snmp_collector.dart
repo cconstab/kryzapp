@@ -56,7 +56,11 @@ class SNMPCollector {
       ..namespace = 'kryz'
       ..hiveStoragePath = '.atsign/storage/$atSign'
       ..commitLogPath = '.atsign/storage/$atSign/commitLog'
-      ..atKeysFilePath = keysFilePath;
+      ..atKeysFilePath = keysFilePath
+      // Without this the SDK fetches all pending offline notifications from
+      // the atServer after auth — that network round-trip can block indefinitely
+      // and prevent authenticate() from returning.
+      ..fetchOfflineNotifications = false;
 
     // Use at_onboarding_cli to onboard
     final atOnboarding = cli.AtOnboardingServiceImpl(
