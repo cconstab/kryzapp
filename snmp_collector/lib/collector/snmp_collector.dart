@@ -60,7 +60,11 @@ class SNMPCollector {
       // Without this the SDK fetches all pending offline notifications from
       // the atServer after auth — that network round-trip can block indefinitely
       // and prevent authenticate() from returning.
-      ..fetchOfflineNotifications = false;
+      ..fetchOfflineNotifications = false
+      // Skip the warm-start sync so the SDK does not race a network sync
+      // during startup (the collector only writes; it never needs to read
+      // remote keys on boot).
+      ..skipSync = true;
 
     // Use at_onboarding_cli to onboard
     final atOnboarding = cli.AtOnboardingServiceImpl(
